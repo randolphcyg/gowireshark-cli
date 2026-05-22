@@ -203,7 +203,7 @@ write_windows_wrappers() {
   cat > "$pkg/bin/gowireshark-env.cmd" <<'EOF2'
 @echo off
 set ROOT=%~dp0..
-set PATH=%ROOT%\lib;%ROOT%\bin;%PATH%
+set PATH=C:\Windows\System32;C:\Windows;%ROOT%\lib;%ROOT%\bin;%PATH%
 set WIRESHARK_LIB_DIR=%ROOT%\lib
 set WIRESHARK_DATA_DIR=%ROOT%\share\wireshark
 if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\gowireshark_conf
@@ -218,7 +218,7 @@ EOF2
   cat > "$pkg/bin/gowireshark-mcp-env.cmd" <<'EOF2'
 @echo off
 set ROOT=%~dp0..
-set PATH=%ROOT%\lib;%ROOT%\bin;%PATH%
+set PATH=C:\Windows\System32;C:\Windows;%ROOT%\lib;%ROOT%\bin;%PATH%
 set WIRESHARK_LIB_DIR=%ROOT%\lib
 set WIRESHARK_DATA_DIR=%ROOT%\share\wireshark
 if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\gowireshark_conf
@@ -323,8 +323,20 @@ archive_package() {
   fi
   case "$target" in
     windows-*)
+      local zip_cmd
       if command -v zip >/dev/null 2>&1; then
-        (cd "$DIST_DIR" && zip -qr "gowireshark-cli-$target.zip" "gowireshark-cli-$target")
+        zip_cmd="zip"
+      elif [[ -x /usr/bin/zip ]]; then
+        zip_cmd="/usr/bin/zip"
+      elif [[ -x /bin/zip ]]; then
+        zip_cmd="/bin/zip"
+      elif [[ -x /c/msys64/usr/bin/zip ]]; then
+        zip_cmd="/c/msys64/usr/bin/zip"
+      elif [[ -x /c/msys32/usr/bin/zip ]]; then
+        zip_cmd="/c/msys32/usr/bin/zip"
+      fi
+      if [[ -n "$zip_cmd" ]]; then
+        (cd "$DIST_DIR" && "$zip_cmd" -qr "gowireshark-cli-$target.zip" "gowireshark-cli-$target")
         echo "  -> $DIST_DIR/gowireshark-cli-$target.zip"
       else
         echo "zip not found; leaving package dir only: $pkg" >&2
@@ -390,6 +402,17 @@ build_windows_amd64() {
   CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/gowireshark-mcp.exe" ./cmd/gowireshark-mcp
   cp -R "$WIRESHARK_DATA_DIR" "$pkg/share/wireshark"
   cp -R "$WIRESHARK_LIB_DIR"/* "$pkg/lib/"
+  
+  # Copy MSYS2 runtime DLLs for standalone operation
+  # libwireshark.dll has deep transitive deps (glib, gio, gmodule, etc.),
+  # so copy all DLLs from ucrt64/bin to ensure the build is truly standalone
+  local msys2_root="${MSYS2_ROOT:-/c/msys64}"
+  local msys2_bin="$msys2_root/ucrt64/bin"
+  if [[ -d "$msys2_bin" ]]; then
+    echo "Copying MSYS2 runtime DLLs..."
+    cp -n "$msys2_bin"/*.dll "$pkg/lib/"
+  fi
+  
   write_windows_wrappers "$pkg"
   archive_package "$target"
 }
