@@ -1,21 +1,61 @@
-/gowireshark
+# OS / editors
 .DS_Store
+.vscode/
 .idea/
+.kiro/
+.codegraph/
+.trae
+.claude/settings.local.json
+.claude/*.local.json
+
+# Native build outputs
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Local dependency workspaces and source archives
+/local_deps/
+/app/deps/
+wireshark/
+*.tar
+*.tar.gz
+*.tar.xz
+*.zip
+
+# Generated local CGO config
+cgo_darwin.go
+cgo_windows.go
+dev_env.sh
+dev_env.ps1
+dev.env
+
+# Local Agent / IDE configuration
 .trae/mcp.json
 .trae/*.local.json
 .codex/*.local.*
-.claude/settings.local.json
-.claude/*.local.json
 .mcp.json
-*.exe
+
+# Local test fixtures and outputs
+pcaps/
+extracted_files/
+output/
+
+# Go build / test outputs
+bin/
+dist/
+coverage.out
+*.coverprofile
 *.test
 *.out
-dist/
-local_deps/
-*.tar
-*.tar.gz
-*.zip
+/gowireshark
+/gowireshark-mcp
+/gowireshark-bench
+/gowireshark-bench-*
+
+# PCAP files
 *.pcap
 *.pcapng
 *.cap
-output/

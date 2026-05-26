@@ -1,0 +1,4 @@
+interface:
+  display_name: gowireshark
+  short_description: Analyze pcap files with the gowireshark CLI
+  default_prompt: Analyze this packet capture with gowireshark and summarize the important findings.

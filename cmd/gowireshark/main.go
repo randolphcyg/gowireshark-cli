@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,7 +20,9 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version":
-		writeJSON(map[string]any{"version": gowireshark.Version()})
+		ver, err := gowireshark.RuntimeVersion(context.Background())
+		must(err)
+		writeJSON(map[string]any{"version": ver.Version})
 	case "filter":
 		filterCmd(os.Args[2:])
 	case "metadata":
@@ -88,7 +91,7 @@ func filterCmd(args []string) {
 		if *prefix == "" {
 			fatal("--prefix is required")
 		}
-		fields, err := gowireshark.SuggestFields(*prefix, *limit)
+		fields, err := gowireshark.RuntimeSuggestFields(context.Background(), *prefix, *limit)
 		must(err)
 		writeJSON(map[string]any{"fields": fields})
 	default:
@@ -102,11 +105,11 @@ func metadataCmd(args []string) {
 	}
 	switch args[0] {
 	case "protocols":
-		protos, err := gowireshark.Protocols()
+		protos, err := gowireshark.RuntimeProtocols(context.Background())
 		must(err)
 		writeJSON(map[string]any{"protocols": protos})
 	case "fields":
-		fields, err := gowireshark.Fields()
+		fields, err := gowireshark.RuntimeFields(context.Background())
 		must(err)
 		writeJSON(map[string]any{"fields": fields})
 	case "field":
@@ -143,7 +146,7 @@ func framesCmd(args []string) {
 	case "get":
 		requireFile(opts.file)
 		requireIndex(opts.index)
-		f, err := gowireshark.FrameByIndex(opts.file, opts.index, frameOptsToSDK(opts)...)
+		f, err := gowireshark.FrameByNumberContext(context.Background(), opts.file, opts.index, frameOptsToSDK(opts)...)
 		must(err)
 		writeJSON(f)
 	case "batch":
@@ -152,13 +155,13 @@ func framesCmd(args []string) {
 			fatal("--indices is required")
 		}
 		idxs := parseIntList(opts.indices)
-		frames, err := gowireshark.FramesByIndices(opts.file, idxs, frameOptsToSDK(opts)...)
+		frames, err := gowireshark.FramesByNumbers(opts.file, idxs, frameOptsToSDK(opts)...)
 		must(err)
 		writeJSON(map[string]any{"list": frames})
 	case "hex":
 		requireFile(opts.file)
 		requireIndex(opts.index)
-		h, err := gowireshark.HexDataByIndex(opts.file, opts.index, frameOptsToSDK(opts)...)
+		h, err := gowireshark.HexDataByFrameNumber(opts.file, opts.index, frameOptsToSDK(opts)...)
 		must(err)
 		writeJSON(h)
 	case "write":
@@ -168,7 +171,7 @@ func framesCmd(args []string) {
 		}
 		if opts.fields != "" {
 			arr := strings.Split(opts.fields, ",")
-			count, err := gowireshark.WriteFramesJSONL(opts.file, os.Stdout, append(frameOptsToSDK(opts), gowireshark.WithOutputFields(arr))...)
+			count, err := gowireshark.WriteFrames(opts.file, os.Stdout, append(frameOptsToSDK(opts), gowireshark.WithOutputFields(arr))...)
 			must(err)
 			fmt.Fprintln(os.Stderr, "written=", count)
 			return
@@ -182,7 +185,7 @@ func framesCmd(args []string) {
 			fatal("--fields is required")
 		}
 		arr := strings.Split(opts.fields, ",")
-		count, err := gowireshark.WriteFramesJSONL(opts.file, os.Stdout, append(frameOptsToSDK(opts), gowireshark.WithOutputFields(arr))...)
+		count, err := gowireshark.WriteFrames(opts.file, os.Stdout, append(frameOptsToSDK(opts), gowireshark.WithOutputFields(arr))...)
 		must(err)
 		fmt.Fprintln(os.Stderr, "written=", count)
 	default:
@@ -272,7 +275,7 @@ func followCmd(args []string) {
 	filterStr := fs.String("filter", "", "display filter")
 	_ = fs.Parse(args)
 	requireFile(*file)
-	data, err := gowireshark.FollowStream(*file, *filterStr, *protocol)
+	data, err := gowireshark.FollowStream(*file, *filterStr, *protocol, gowireshark.WithIgnoreErrors(true))
 	must(err)
 	writeJSON(data)
 }
@@ -299,7 +302,7 @@ func sliceCmd(args []string) {
 	if *indices != "" {
 		selector.Indices = parseIntList(*indices)
 	}
-	count, err := gowireshark.WritePcapSlice(*file, outW, selector)
+	count, err := gowireshark.WritePcapSlice(*file, outW, selector, gowireshark.WithIgnoreErrors(true))
 	must(err)
 	writeJSON(map[string]any{"written": count, "output": *out})
 }
@@ -313,7 +316,7 @@ func evidenceCmd(args []string) {
 	filterStr := fs.String("filter", "", "display filter")
 	_ = fs.Parse(args[1:])
 	requireFile(*file)
-	bundle, err := gowireshark.BuildEvidenceBundle(*file, gowireshark.FrameSelector{Filter: *filterStr})
+	bundle, err := gowireshark.BuildEvidenceBundle(*file, gowireshark.FrameSelector{Filter: *filterStr}, gowireshark.WithIgnoreErrors(true))
 	must(err)
 	writeJSON(bundle)
 }
