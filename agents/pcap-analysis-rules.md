@@ -7,6 +7,7 @@ Use `gowireshark` as a bounded forensic lens. Prefer small, reproducible queries
 1. Gauge capture size first:
    ```bash
    gowireshark frames count --file <pcap>
+   gowireshark stats --file <pcap>
    ```
 2. Map traffic:
    ```bash
@@ -29,6 +30,11 @@ Use `gowireshark` as a bounded forensic lens. Prefer small, reproducible queries
    ```bash
    gowireshark slice pcap --file <pcap> --filter '<display-filter>' --out evidence.pcap
    gowireshark evidence bundle --file <pcap> --filter '<display-filter>'
+   ```
+7. Extract files when needed:
+   ```bash
+   gowireshark extract --file <pcap> --out extracted-files/
+   gowireshark export-object list --file <pcap> --protocol http
    ```
 
 ## Do not

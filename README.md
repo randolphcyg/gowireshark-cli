@@ -406,16 +406,13 @@ For Windows, use the `.cmd` wrapper in the same template (note the `.cmd` extens
 
 ```
 --filter <expr>          display filter
---decode-as <rules>      decode-as rules, e.g. tcp.port:8080:http
---profile <name>         Wireshark profile
---pref <name:val,...>    Wireshark preferences
---name-resolution <opts> mac,network,transport,external
---parse-mode <mode>      raw | base | selected
---layers <names>         selected layers, e.g. tcp,ip
 --compact                compact JSON output
 --raw-json               include raw protocol fields in output
 --ignore-errors          skip frames with parse errors
 ```
+
+The following flags are planned for future SDK support and are not yet available in the CLI:
+`--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`
 
 ## Commands
 

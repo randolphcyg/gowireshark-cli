@@ -7,6 +7,7 @@ Use `gowireshark` as a bounded forensic toolbox. Prefer the smallest command tha
 1. Gauge capture size first:
    ```bash
    gowireshark frames count --file <pcap>
+   gowireshark stats --file <pcap>
    ```
 2. Map traffic structure:
    ```bash
@@ -28,6 +29,11 @@ Use `gowireshark` as a bounded forensic toolbox. Prefer the smallest command tha
    ```bash
    gowireshark slice pcap --file <pcap> --filter '<expr>' --out evidence.pcap
    gowireshark evidence bundle --file <pcap> --filter '<expr>'
+   ```
+7. Extract files when needed:
+   ```bash
+   gowireshark extract --file <pcap> --out extracted-files/
+   gowireshark export-object list --file <pcap> --protocol http
    ```
 
 ## Output Discipline

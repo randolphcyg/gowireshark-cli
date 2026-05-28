@@ -21,9 +21,11 @@ When analyzing packet captures, use the CLI as a forensic lens:
 
 ```bash
 gowireshark frames count --file "$PCAP"
+gowireshark stats --file "$PCAP"
 gowireshark streams list --file "$PCAP"
 gowireshark expert list --file "$PCAP"
 gowireshark traffic timeline summary --file "$PCAP"
 gowireshark filter validate-detailed --expr 'tcp.stream eq 0'
 gowireshark slice pcap --file "$PCAP" --filter 'tcp.stream eq 0' --out stream-0.pcap
+gowireshark extract --file "$PCAP" --out extracted-files/
 ```

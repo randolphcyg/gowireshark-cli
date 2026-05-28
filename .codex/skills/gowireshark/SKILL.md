@@ -9,12 +9,12 @@ Use the `gowireshark` CLI for packet-analysis work. Prefer the smallest query th
 
 ## Recommended Agent Workflow
 
-1. **Explore the capture landscape**: Start with `metadata fields` or `filter suggest` to discover available fields. Use `frames count` to gauge capture size.
-2. **Understand traffic structure**: Use `streams list` to see TCP/UDP streams and their IDs. Each `streamId >= 0` is a followable stream.
+1. **Explore the capture landscape**: Start with `metadata fields` or `filter suggest` to discover available fields. Use `frames count` to gauge capture size. Use `stats` for protocol hierarchy and summary statistics.
+2. **Understand traffic structure**: Use `streams list` to see TCP/UDP streams and their IDs. Each `streamId >= 0` is a followable stream. Use `traffic timeline summary` for temporal patterns.
 3. **Deep-dive into streams**: For each interesting stream, use `follow --filter 'tcp.stream eq N'` to get reassembled payloads.
 4. **Expert analysis**: Run `expert list` to find anomalies, retransmissions, and protocol violations.
 5. **Evidence production**: Use `slice pcap` to extract relevant packets, or `evidence bundle` for comprehensive forensic output.
-6. **File extraction**: Use `export-object list/write` when the task needs extracted HTTP objects.
+6. **File extraction**: Use `export-object list/write` when the task needs extracted HTTP objects, or `extract` to pull all embedded files from a capture.
 
 ## Output discipline
 
@@ -24,7 +24,9 @@ Use the `gowireshark` CLI for packet-analysis work. Prefer the smallest query th
 
 ## Common flags available on most commands
 
-`--filter`, `--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`, `--compact`, `--raw-json`
+`--filter`, `--compact`, `--raw-json`
+
+Flags planned for future SDK support: `--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`
 
 ## References
 

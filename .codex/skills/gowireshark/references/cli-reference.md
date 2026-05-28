@@ -65,9 +65,18 @@ gowireshark export-object list --file capture.pcap --protocol http
 gowireshark export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
 ```
 
+## Stats & Extraction
+
+```bash
+gowireshark stats --file capture.pcap --filter 'tcp'
+gowireshark extract --file capture.pcap --out extracted-files/
+```
+
 ## Common Flags
 
-Most commands support: `--filter`, `--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`, `--compact`, `--raw-json`
+Most commands support: `--filter`, `--compact`, `--raw-json`
+
+Flags planned for future SDK support: `--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`
 
 ## Guidance
 

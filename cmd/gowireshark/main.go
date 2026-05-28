@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: gowireshark <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object>")
+		fatal("usage: gowireshark <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>")
 	}
 	switch os.Args[1] {
 	case "version":
