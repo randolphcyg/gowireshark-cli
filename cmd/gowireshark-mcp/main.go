@@ -193,17 +193,24 @@ func newMCPServer() *mcp.Server {
 	return srv
 }
 
-func addTool[In any, Out any](srv *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out]) {
-	mcp.AddTool(srv, tool, tracedTool(tool.Name, handler))
+func addTool[In any](srv *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, map[string]any]) {
+	mcp.AddTool[In, any](srv, tool, tracedTool(tool.Name, handler))
 }
 
-func tracedTool[In any, Out any](toolName string, handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
-	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, structured Out, err error) {
+// successResult wraps buildResult and discards the structured output so the SDK
+// does not set StructuredContent on the wire. Clients that cannot handle
+// structuredContent without an advertised outputSchema (e.g. Trae) will see
+// only the text content. Error envelopes still set StructuredContent explicitly.
+func successResult(out *gowiresharkOutput) (*mcp.CallToolResult, map[string]any, error) {
+	return buildResult(out.Text, out), nil, nil
+}
+
+func tracedTool[In any](toolName string, handler mcp.ToolHandlerFor[In, map[string]any]) mcp.ToolHandlerFor[In, any] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, structured any, err error) {
 		start := time.Now()
 		traceID := newTraceID()
 		status := "success"
 		errorCode := ""
-		var zero Out
 		defer func() {
 			if r := recover(); r != nil {
 				err = nil
@@ -211,7 +218,10 @@ func tracedTool[In any, Out any](toolName string, handler mcp.ToolHandlerFor[In,
 				errorCode = "INTERNAL_EXCEPTION"
 				envelope := errorEnvelope(toolName, traceID, errorCode, fmt.Sprintf("panic: %v", r), false)
 				result = errorEnvelopeResult(envelope, traceID)
-				structured = zero
+				// Do not return envelope as structured output; errorEnvelopeResult
+				// already sets result.StructuredContent. Returning nil prevents
+				// the SDK from re-marshaling or triggering schema validation.
+				structured = nil
 			}
 			if result != nil {
 				if result.Meta == nil {
@@ -228,15 +238,20 @@ func tracedTool[In any, Out any](toolName string, handler mcp.ToolHandlerFor[In,
 			errorCode = errorCodeFor(err)
 			envelope := errorEnvelope(toolName, traceID, errorCode, err.Error(), retryableError(err))
 			result = errorEnvelopeResult(envelope, traceID)
-			structured = zero
+			// Do not pass envelope as structured output; errorEnvelopeResult
+			// already sets result.StructuredContent directly. Returning nil
+			// prevents the SDK from overwriting it or triggering schema validation.
 			err = nil
-			return result, structured, nil
+			return result, nil, nil
 		}
+		// Guard against typed nil: a nil map[string]any assigned to any is
+		// non-nil in Go, which would cause the SDK to marshal "null" into
+		// StructuredContent. Explicitly clear it.
 		if result != nil && result.IsError {
 			status = "semantic_failure"
 			errorCode = "TOOL_ERROR"
 		}
-		return result, structured, nil
+		return result, nil, nil
 	}
 }
 
@@ -917,8 +932,7 @@ func handleVersion(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFilterValidate(ctx context.Context, _ *mcp.CallToolRequest, in filterValidateIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -929,8 +943,7 @@ func handleFilterValidate(ctx context.Context, _ *mcp.CallToolRequest, in filter
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFilterValidateDetailed(ctx context.Context, _ *mcp.CallToolRequest, in filterValidateDetailedIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -941,8 +954,7 @@ func handleFilterValidateDetailed(ctx context.Context, _ *mcp.CallToolRequest, i
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFilterSuggest(ctx context.Context, _ *mcp.CallToolRequest, in filterSuggestIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -957,8 +969,7 @@ func handleFilterSuggest(ctx context.Context, _ *mcp.CallToolRequest, in filterS
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleMetadataProtocols(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -966,8 +977,7 @@ func handleMetadataProtocols(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleMetadataFields(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -976,8 +986,7 @@ func handleMetadataFields(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn
 		return nil, nil, err
 	}
 	out.suggestTool("gowireshark_suggest_filter")
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleMetadataField(ctx context.Context, _ *mcp.CallToolRequest, in metadataFieldIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -988,8 +997,7 @@ func handleMetadataField(ctx context.Context, _ *mcp.CallToolRequest, in metadat
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesCount(ctx context.Context, _ *mcp.CallToolRequest, in framesCountIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1002,8 +1010,7 @@ func handleFramesCount(ctx context.Context, _ *mcp.CallToolRequest, in framesCou
 		return nil, nil, err
 	}
 	out.suggestTool("gowireshark_list_streams")
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesPage(ctx context.Context, _ *mcp.CallToolRequest, in framesPageIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1027,8 +1034,7 @@ func handleFramesPage(ctx context.Context, _ *mcp.CallToolRequest, in framesPage
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesGet(ctx context.Context, _ *mcp.CallToolRequest, in framesGetIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1043,8 +1049,7 @@ func handleFramesGet(ctx context.Context, _ *mcp.CallToolRequest, in framesGetIn
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesBatch(ctx context.Context, _ *mcp.CallToolRequest, in framesBatchIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1063,8 +1068,7 @@ func handleFramesBatch(ctx context.Context, _ *mcp.CallToolRequest, in framesBat
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesHex(ctx context.Context, _ *mcp.CallToolRequest, in framesHexIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1079,8 +1083,7 @@ func handleFramesHex(ctx context.Context, _ *mcp.CallToolRequest, in framesHexIn
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFramesFields(ctx context.Context, _ *mcp.CallToolRequest, in framesFieldsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1099,8 +1102,7 @@ func handleFramesFields(ctx context.Context, _ *mcp.CallToolRequest, in framesFi
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleStreamsList(ctx context.Context, _ *mcp.CallToolRequest, in streamsListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1112,8 +1114,7 @@ func handleStreamsList(ctx context.Context, _ *mcp.CallToolRequest, in streamsLi
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleConversationsList(ctx context.Context, _ *mcp.CallToolRequest, in conversationsListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1125,8 +1126,7 @@ func handleConversationsList(ctx context.Context, _ *mcp.CallToolRequest, in con
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleTimelineSummary(ctx context.Context, _ *mcp.CallToolRequest, in timelineSummaryIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1138,8 +1138,7 @@ func handleTimelineSummary(ctx context.Context, _ *mcp.CallToolRequest, in timel
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFilesList(ctx context.Context, _ *mcp.CallToolRequest, in filesListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1151,8 +1150,7 @@ func handleFilesList(ctx context.Context, _ *mcp.CallToolRequest, in filesListIn
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleExpertList(ctx context.Context, _ *mcp.CallToolRequest, in expertListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1164,8 +1162,7 @@ func handleExpertList(ctx context.Context, _ *mcp.CallToolRequest, in expertList
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleFollowStream(ctx context.Context, _ *mcp.CallToolRequest, in followStreamIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1188,8 +1185,7 @@ func handleFollowStream(ctx context.Context, _ *mcp.CallToolRequest, in followSt
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleSlicePcap(ctx context.Context, _ *mcp.CallToolRequest, in slicePcapIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1215,8 +1211,7 @@ func handleSlicePcap(ctx context.Context, _ *mcp.CallToolRequest, in slicePcapIn
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleEvidenceBundle(ctx context.Context, _ *mcp.CallToolRequest, in evidenceBundleIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1229,8 +1224,7 @@ func handleEvidenceBundle(ctx context.Context, _ *mcp.CallToolRequest, in eviden
 		return nil, nil, err
 	}
 	out.suggestTool("gowireshark_create_pcap_slice")
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verifyZeekAlertIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1280,7 +1274,7 @@ func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verif
 	}
 
 	text, _ := json.MarshalIndent(resp, "", "  ")
-	return textResult(string(text)), resp, nil
+	return textResult(string(text)), nil, nil
 }
 
 func zeekAlertFilter(in verifyZeekAlertIn) string {
@@ -1378,8 +1372,7 @@ func handleTapConversations(ctx context.Context, _ *mcp.CallToolRequest, in tapC
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleTapEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in tapEndpointsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1402,8 +1395,7 @@ func handleTapEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in tapEndpo
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleSRTList(ctx context.Context, _ *mcp.CallToolRequest, in srtListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1422,8 +1414,7 @@ func handleSRTList(ctx context.Context, _ *mcp.CallToolRequest, in srtListIn) (*
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleExportObjectList(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectListIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1442,8 +1433,7 @@ func handleExportObjectList(ctx context.Context, _ *mcp.CallToolRequest, in expo
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleExportObjectWrite(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectWriteIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1472,8 +1462,7 @@ func handleExportObjectWrite(ctx context.Context, _ *mcp.CallToolRequest, in exp
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleStatsSummary(ctx context.Context, _ *mcp.CallToolRequest, in statsSummaryIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1486,8 +1475,7 @@ func handleStatsSummary(ctx context.Context, _ *mcp.CallToolRequest, in statsSum
 		return nil, nil, err
 	}
 	out.suggestTool("gowireshark_create_evidence_bundle")
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleExtractFiles(ctx context.Context, _ *mcp.CallToolRequest, in extractFilesIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1506,8 +1494,7 @@ func handleExtractFiles(ctx context.Context, _ *mcp.CallToolRequest, in extractF
 	if err != nil {
 		return nil, nil, err
 	}
-	parsed := parseOutput(out)
-	return buildResult(out.Text, out), parsed, nil
+	return successResult(out)
 }
 
 func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1530,6 +1517,29 @@ func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp
 		"gowiresharkMaxOutputBytes": os.Getenv("GOWIRESHARK_MAX_OUTPUT_BYTES"),
 	}
 
+	// List available PCAP files in the allowed directory
+	if dir := pcapDir(); dir != "" {
+		entries, err := os.ReadDir(dir)
+		if err == nil {
+			var pcaps []string
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(e.Name()))
+				if ext == ".pcap" || ext == ".pcapng" || ext == ".cap" {
+					pcaps = append(pcaps, e.Name())
+				}
+			}
+			result["availablePcaps"] = pcaps
+			result["availablePcapCount"] = len(pcaps)
+		} else {
+			result["pcapDirError"] = err.Error()
+		}
+	} else {
+		result["pcapDirNote"] = "GOWIRESHARK_PCAP_DIR not set; any absolute path is accepted"
+	}
+
 	verOut, verErr := runGowireshark(ctx, "version")
 	if verErr != nil {
 		result["runtimeStatus"] = fmt.Sprintf("unavailable: %v", verErr)
@@ -1547,7 +1557,7 @@ func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp
 	result["binaryFound"] = err == nil
 
 	text, _ := json.MarshalIndent(result, "", "  ")
-	return textResult(string(text)), result, nil
+	return textResult(string(text)), nil, nil
 }
 
 // --- Resources ---

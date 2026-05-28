@@ -605,6 +605,9 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	if result.StructuredContent == nil {
 		t.Fatal("expected structured error envelope")
 	}
+	if result.StructuredContent.(map[string]any)["ok"] != false {
+		t.Fatalf("structured error envelope ok = %v, want false", result.StructuredContent.(map[string]any)["ok"])
+	}
 	if result.Meta["trace_id"] == "" {
 		t.Fatal("expected trace_id metadata")
 	}
@@ -614,6 +617,21 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"tool_name":"gowireshark_count_frames"`) {
 		t.Fatalf("call log missing tool name: %s", data)
+	}
+}
+
+func TestCountFramesDoesNotAdvertiseOutputSchema(t *testing.T) {
+	cs, closeFn := startMCPTestSession(t)
+	defer closeFn()
+
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name == "gowireshark_count_frames" && tool.OutputSchema != nil {
+			t.Fatalf("gowireshark_count_frames output schema = %#v, want nil so clients accept CLI JSON structuredContent", tool.OutputSchema)
+		}
 	}
 }
 
