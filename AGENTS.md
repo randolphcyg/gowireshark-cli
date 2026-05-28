@@ -43,6 +43,10 @@ Use `gowireshark` as a bounded forensic toolbox. Prefer the smallest command tha
 - JSON is emitted on stdout; diagnostics belong on stderr.
 - Use real Wireshark field names such as `frame.number`, `ip.src`, `ip.dst`, and `frame.protocols`.
 
+## MCP Tool Names
+
+MCP uses breaking, Agent-oriented names. Prefer `gowireshark_health_check`, `gowireshark_count_frames`, `gowireshark_list_streams`, `gowireshark_list_expert_findings`, `gowireshark_validate_filter`, `gowireshark_verify_zeek_alert`, `gowireshark_create_pcap_slice`, and `gowireshark_create_evidence_bundle`. Do not use removed legacy names.
+
 ## Validation
 
 Run before handing off CLI changes:

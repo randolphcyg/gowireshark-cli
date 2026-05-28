@@ -7,6 +7,8 @@ description: Analyze packet captures with the gowireshark CLI. Use when a task i
 
 Use the `gowireshark` CLI for packet-analysis work. Prefer the smallest query that answers the question.
 
+When using the MCP server instead of the CLI, use the breaking Agent-oriented tool names: `gowireshark_health_check`, `gowireshark_count_frames`, `gowireshark_list_streams`, `gowireshark_list_expert_findings`, `gowireshark_validate_filter`, `gowireshark_verify_zeek_alert`, `gowireshark_create_pcap_slice`, and `gowireshark_create_evidence_bundle`.
+
 ## Recommended Agent Workflow
 
 1. **Explore the capture landscape**: Start with `metadata fields` or `filter suggest` to discover available fields. Use `frames count` to gauge capture size. Use `stats` for protocol hierarchy and summary statistics.

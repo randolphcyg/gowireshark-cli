@@ -242,7 +242,13 @@ cd <gowireshark-cli-path>/dist/gowireshark-cli-windows-amd64
 > 如果 MCP 客户端以空环境启动进程（仅传递 `env` 中的变量），wrapper 仍然能正常工作，
 > 因为它内置了系统路径兜底。
 
-MCP 模式启动后，通过 Trae 调用 `gowireshark_version` 应返回 `{"version": "4.6.6"}`。
+MCP 模式启动后，通过 Trae 调用 `gowireshark_get_version` 应返回 `{"version": "4.6.6"}`。
+
+> MCP tool name 从 1.0 起采用面向 Agent 的动词命名，旧名已删除。常用入口：
+> `gowireshark_health_check`、`gowireshark_count_frames`、`gowireshark_list_streams`、
+> `gowireshark_validate_filter`、`gowireshark_verify_zeek_alert`、
+> `gowireshark_create_evidence_bundle`。升级后需要重启 MCP 客户端以刷新 schema。
+> 可设置 `MCP_CALL_LOG_PATH=/path/to/mcp-calls.jsonl` 记录 JSONL 调用日志。
 
 **方式3：直接在目标主机使用**
 

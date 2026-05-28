@@ -32,157 +32,158 @@ func main() {
 func newMCPServer() *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "gowireshark", Version: "1.0.0"}, nil)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_version",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_version",
 		Description: "Get gowireshark runtime version information",
 	}, handleVersion)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_filter_validate",
-		Description: "Validate a Wireshark display filter expression. Returns whether the filter syntax is valid.",
-	}, handleFilterValidate)
-
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_filter_validate_detailed",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_validate_filter",
 		Description: "Validate a display filter with detailed field-level feedback including field types and valid operators",
 	}, handleFilterValidateDetailed)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_filter_suggest",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_suggest_filter",
 		Description: "Suggest Wireshark display filter field names by prefix (e.g. 'tcp.' or 'ip.')",
 	}, handleFilterSuggest)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_metadata_protocols",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_protocols",
 		Description: "List all protocols supported by the Wireshark runtime",
 	}, handleMetadataProtocols)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_metadata_fields",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_fields",
 		Description: "List all display filter fields supported by the Wireshark runtime",
 	}, handleMetadataFields)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_metadata_field",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_field_info",
 		Description: "Get detailed metadata for a specific display filter field (type, description, valid operators)",
 	}, handleMetadataField)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_count",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_count_frames",
 		Description: "Count frames in a PCAP file, optionally filtered by a display filter expression",
 	}, handleFramesCount)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_page",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_frames",
 		Description: "Get a paginated list of frames from a PCAP file. Use page>=1 and size>=1 for pagination.",
-		InputSchema: toolInputSchema("gowireshark_frames_page"),
+		InputSchema: toolInputSchema("gowireshark_list_frames"),
 	}, handleFramesPage)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_get",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_frame",
 		Description: "Get a single frame by its frame number (1-based index)",
-		InputSchema: toolInputSchema("gowireshark_frames_get"),
+		InputSchema: toolInputSchema("gowireshark_get_frame"),
 	}, handleFramesGet)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_batch",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_frames_batch",
 		Description: "Get multiple frames by their frame numbers (comma-separated indices, e.g. '1,5,10')",
 	}, handleFramesBatch)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_hex",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_frame_hex",
 		Description: "Get hex dump (raw bytes) for a specific frame by its frame number",
 	}, handleFramesHex)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_frames_fields",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_frame_fields",
 		Description: "Export selected display filter fields from frames as JSONL. Use Wireshark field names like 'ip.src','ip.dst','tcp.port'.",
 	}, handleFramesFields)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_streams_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_streams",
 		Description: "List TCP and UDP streams in a PCAP file with stream IDs for follow operations",
 	}, handleStreamsList)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_conversations_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_conversations",
 		Description: "List network conversations (address pair exchanges) from a PCAP file",
 	}, handleConversationsList)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_timeline_summary",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_timeline_summary",
 		Description: "Get traffic timeline summary (packet activity over time) from a PCAP file",
 	}, handleTimelineSummary)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_files_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_files",
 		Description: "List file objects detected in network traffic (e.g. HTTP downloads, SMB transfers)",
 	}, handleFilesList)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_expert_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_expert_findings",
 		Description: "Get expert analysis entries (anomalies, warnings, protocol violations) from a PCAP file",
 	}, handleExpertList)
 
-	mcp.AddTool(srv, &mcp.Tool{
+	addTool(srv, &mcp.Tool{
 		Name:        "gowireshark_follow_stream",
 		Description: "Follow and reconstruct a TCP or UDP stream. Use protocol=tcp|udp with a stream filter like 'tcp.stream eq 0'.",
 		InputSchema: toolInputSchema("gowireshark_follow_stream"),
 	}, handleFollowStream)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_slice_pcap",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_create_pcap_slice",
 		Description: "Slice a PCAP file by display filter or frame indices into a new PCAP file. Output is written to GOWIRESHARK_OUTPUT_DIR.",
-		InputSchema: toolInputSchema("gowireshark_slice_pcap"),
+		InputSchema: toolInputSchema("gowireshark_create_pcap_slice"),
 	}, handleSlicePcap)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_evidence_bundle",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_create_evidence_bundle",
 		Description: "Build a comprehensive forensic evidence bundle including conversations, expert infos, and protocol hierarchy",
 	}, handleEvidenceBundle)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_tap_conversations",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_verify_zeek_alert",
+		Description: "Verify a Zeek alert against packet evidence. Provide file plus either filter or Zeek alert fields; returns validation, candidate frames, streams, and expert findings.",
+		InputSchema: toolInputSchema("gowireshark_verify_zeek_alert"),
+	}, handleVerifyZeekAlert)
+
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_tap_conversations",
 		Description: "Get conversation statistics via tap interface. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("gowireshark_tap_conversations"),
+		InputSchema: toolInputSchema("gowireshark_list_tap_conversations"),
 	}, handleTapConversations)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_tap_endpoints",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_tap_endpoints",
 		Description: "Get endpoint statistics via tap interface. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("gowireshark_tap_endpoints"),
+		InputSchema: toolInputSchema("gowireshark_list_tap_endpoints"),
 	}, handleTapEndpoints)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_srt_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_service_response_times",
 		Description: "Get service response time statistics for a protocol (e.g. smb, dns, http)",
 	}, handleSRTList)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_export_object_list",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_list_exportable_objects",
 		Description: "List exportable objects for a protocol (e.g. http objects like files, images)",
 	}, handleExportObjectList)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_export_object_write",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_write_exported_object",
 		Description: "Write an export object to a file. Output is restricted to GOWIRESHARK_OUTPUT_DIR.",
-		InputSchema: toolInputSchema("gowireshark_export_object_write"),
+		InputSchema: toolInputSchema("gowireshark_write_exported_object"),
 	}, handleExportObjectWrite)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_stats_summary",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_get_stats_summary",
 		Description: "Get a comprehensive statistical summary of a PCAP file including protocol distribution, packet sizes, and timing",
-		InputSchema: toolInputSchema("gowireshark_stats_summary"),
+		InputSchema: toolInputSchema("gowireshark_get_stats_summary"),
 	}, handleStatsSummary)
 
-	mcp.AddTool(srv, &mcp.Tool{
+	addTool(srv, &mcp.Tool{
 		Name:        "gowireshark_extract_files",
 		Description: "Extract files and objects detected in network traffic to a local directory. Output is restricted to GOWIRESHARK_OUTPUT_DIR.",
 		InputSchema: toolInputSchema("gowireshark_extract_files"),
 	}, handleExtractFiles)
 
-	mcp.AddTool(srv, &mcp.Tool{
-		Name:        "gowireshark_doctor",
+	addTool(srv, &mcp.Tool{
+		Name:        "gowireshark_health_check",
 		Description: "Diagnose the gowireshark runtime environment: version, binary path, directories, environment variables",
 	}, handleDoctor)
 
@@ -192,20 +193,67 @@ func newMCPServer() *mcp.Server {
 	return srv
 }
 
+func addTool[In any, Out any](srv *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor[In, Out]) {
+	mcp.AddTool(srv, tool, tracedTool(tool.Name, handler))
+}
+
+func tracedTool[In any, Out any](toolName string, handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (result *mcp.CallToolResult, structured Out, err error) {
+		start := time.Now()
+		traceID := newTraceID()
+		status := "success"
+		errorCode := ""
+		var zero Out
+		defer func() {
+			if r := recover(); r != nil {
+				err = nil
+				status = "exception"
+				errorCode = "INTERNAL_EXCEPTION"
+				envelope := errorEnvelope(toolName, traceID, errorCode, fmt.Sprintf("panic: %v", r), false)
+				result = errorEnvelopeResult(envelope, traceID)
+				structured = zero
+			}
+			if result != nil {
+				if result.Meta == nil {
+					result.Meta = mcp.Meta{}
+				}
+				result.Meta["trace_id"] = traceID
+			}
+			writeToolCallLog(toolName, traceID, in, status, errorCode, result, time.Since(start))
+		}()
+
+		result, structured, err = handler(ctx, req, in)
+		if err != nil {
+			status = "semantic_failure"
+			errorCode = errorCodeFor(err)
+			envelope := errorEnvelope(toolName, traceID, errorCode, err.Error(), retryableError(err))
+			result = errorEnvelopeResult(envelope, traceID)
+			structured = zero
+			err = nil
+			return result, structured, nil
+		}
+		if result != nil && result.IsError {
+			status = "semantic_failure"
+			errorCode = "TOOL_ERROR"
+		}
+		return result, structured, nil
+	}
+}
+
 func toolInputSchema(name string) map[string]any {
 	file := map[string]any{"type": "string", "minLength": 1, "description": "PCAP path. Relative paths resolve under GOWIRESHARK_PCAP_DIR when set."}
 	filter := map[string]any{"type": "string", "description": "Wireshark display filter expression."}
 	out := map[string]any{"type": "string", "minLength": 1, "description": "Output path. Relative paths resolve under GOWIRESHARK_OUTPUT_DIR."}
 
 	switch name {
-	case "gowireshark_frames_page":
+	case "gowireshark_list_frames":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"filter": filter,
 			"page":   map[string]any{"type": "integer", "minimum": 1, "default": 1},
 			"size":   map[string]any{"type": "integer", "minimum": 1, "default": 20},
 		})
-	case "gowireshark_frames_get":
+	case "gowireshark_get_frame":
 		return objectSchema([]string{"file", "index"}, map[string]any{
 			"file":  file,
 			"index": map[string]any{"type": "integer", "minimum": 1},
@@ -216,26 +264,26 @@ func toolInputSchema(name string) map[string]any {
 			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
 			"filter":   filter,
 		})
-	case "gowireshark_slice_pcap":
+	case "gowireshark_create_pcap_slice":
 		return objectSchema([]string{"file", "out"}, map[string]any{
 			"file":    file,
 			"out":     out,
 			"filter":  filter,
 			"indices": map[string]any{"type": "string", "description": "Comma-separated frame numbers."},
 		})
-	case "gowireshark_tap_conversations":
+	case "gowireshark_list_tap_conversations":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "tcp"},
 			"filter": filter,
 		})
-	case "gowireshark_tap_endpoints":
+	case "gowireshark_list_tap_endpoints":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "ip"},
 			"filter": filter,
 		})
-	case "gowireshark_export_object_write":
+	case "gowireshark_write_exported_object":
 		return objectSchema([]string{"file", "protocol", "packetNum", "out"}, map[string]any{
 			"file":      file,
 			"protocol":  map[string]any{"type": "string", "minLength": 1},
@@ -243,7 +291,7 @@ func toolInputSchema(name string) map[string]any {
 			"out":       out,
 			"filter":    filter,
 		})
-	case "gowireshark_stats_summary":
+	case "gowireshark_get_stats_summary":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"filter": filter,
@@ -252,6 +300,17 @@ func toolInputSchema(name string) map[string]any {
 		return objectSchema([]string{"file", "out"}, map[string]any{
 			"file": file,
 			"out":  out,
+		})
+	case "gowireshark_verify_zeek_alert":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":     file,
+			"filter":   filter,
+			"alert":    map[string]any{"type": "object", "description": "Zeek alert object, for example id.orig_h/id.resp_h/proto/id.orig_p/id.resp_p."},
+			"src_ip":   map[string]any{"type": "string", "description": "Optional source IP when alert is not supplied."},
+			"dst_ip":   map[string]any{"type": "string", "description": "Optional destination IP when alert is not supplied."},
+			"src_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+			"dst_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
+			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}},
 		})
 	default:
 		return objectSchema(nil, map[string]any{})
@@ -540,6 +599,139 @@ func buildResult(text string, out *gowiresharkOutput) *mcp.CallToolResult {
 	return result
 }
 
+func newTraceID() string {
+	if v := os.Getenv("MCP_TRACE_ID"); v != "" {
+		return v
+	}
+	return fmt.Sprintf("gw-%d-%d", time.Now().UnixNano(), os.Getpid())
+}
+
+func errorEnvelope(toolName, traceID, code, message string, retryable bool) map[string]any {
+	envelope := map[string]any{
+		"ok":            false,
+		"status":        "semantic_failure",
+		"tool":          toolName,
+		"error_code":    code,
+		"error_message": message,
+		"suggestion":    suggestionForError(code, message),
+		"retryable":     retryable,
+		"retry_with":    map[string]any{},
+		"trace_id":      traceID,
+	}
+	if next := nextToolForError(code, message); next != "" {
+		envelope["next_tool"] = next
+	}
+	return envelope
+}
+
+func errorEnvelopeResult(envelope map[string]any, traceID string) *mcp.CallToolResult {
+	text, _ := json.MarshalIndent(envelope, "", "  ")
+	return &mcp.CallToolResult{
+		Meta:              mcp.Meta{"trace_id": traceID},
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(text)}},
+		StructuredContent: envelope,
+		IsError:           true,
+	}
+}
+
+func errorCodeFor(err error) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "outside allowed directory"), strings.Contains(msg, "cannot resolve path"):
+		return "INVALID_PATH"
+	case strings.Contains(msg, "required"):
+		return "MISSING_REQUIRED_PARAM"
+	case strings.Contains(msg, "invalid protocol"), strings.Contains(msg, "invalid tap type"), strings.Contains(msg, "must be"):
+		return "INVALID_ARGUMENT"
+	case strings.Contains(msg, "context deadline exceeded"), strings.Contains(msg, "timed out"):
+		return "TIMEOUT"
+	case strings.Contains(msg, "command failed"):
+		return "CLI_ERROR"
+	default:
+		return "TOOL_ERROR"
+	}
+}
+
+func retryableError(err error) bool {
+	code := errorCodeFor(err)
+	return code == "TIMEOUT"
+}
+
+func suggestionForError(code, message string) string {
+	switch code {
+	case "INVALID_PATH":
+		return "Use the gowireshark://pcaps resource to get an allowed path, or pass a relative PCAP name under GOWIRESHARK_PCAP_DIR."
+	case "MISSING_REQUIRED_PARAM":
+		return "Check the tool input schema and provide the required parameter before retrying."
+	case "INVALID_ARGUMENT":
+		return "Use schema enum values and numeric minimums exactly as advertised by list tools."
+	case "TIMEOUT":
+		return "Retry with a narrower display filter or increase GOWIRESHARK_TIMEOUT for large captures."
+	case "CLI_ERROR":
+		if strings.Contains(strings.ToLower(message), "filter") {
+			return "Call gowireshark_validate_filter or gowireshark_suggest_filter before reusing this display filter."
+		}
+		return "Call gowireshark_health_check to verify the runtime, then retry with a narrower query."
+	default:
+		return "Inspect error_message and retry with corrected parameters."
+	}
+}
+
+func nextToolForError(code, message string) string {
+	switch code {
+	case "INVALID_PATH":
+		return "gowireshark_health_check"
+	case "CLI_ERROR":
+		if strings.Contains(strings.ToLower(message), "filter") {
+			return "gowireshark_validate_filter"
+		}
+		return "gowireshark_health_check"
+	default:
+		return ""
+	}
+}
+
+func writeToolCallLog(toolName, traceID string, input any, status, errorCode string, result *mcp.CallToolResult, duration time.Duration) {
+	path := os.Getenv("MCP_CALL_LOG_PATH")
+	if path == "" {
+		return
+	}
+	record := map[string]any{
+		"timestamp":        time.Now().UTC().Format(time.RFC3339Nano),
+		"trace_id":         traceID,
+		"tool_name":        toolName,
+		"normalized_input": input,
+		"status":           status,
+		"error_code":       errorCode,
+		"duration_ms":      duration.Milliseconds(),
+		"output_bytes":     resultTextBytes(result),
+		"artifact_paths":   []string{},
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
+}
+
+func resultTextBytes(result *mcp.CallToolResult) int {
+	if result == nil {
+		return 0
+	}
+	total := 0
+	for _, content := range result.Content {
+		if text, ok := content.(*mcp.TextContent); ok {
+			total += len(text.Text)
+		}
+	}
+	return total
+}
+
 func textResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
@@ -663,6 +855,17 @@ type evidenceBundleIn struct {
 	Filter *string `json:"filter,omitempty"`
 }
 
+type verifyZeekAlertIn struct {
+	File    string         `json:"file"`
+	Filter  *string        `json:"filter,omitempty"`
+	Alert   map[string]any `json:"alert,omitempty"`
+	SrcIP   *string        `json:"src_ip,omitempty"`
+	DstIP   *string        `json:"dst_ip,omitempty"`
+	SrcPort *int           `json:"src_port,omitempty"`
+	DstPort *int           `json:"dst_port,omitempty"`
+	Proto   *string        `json:"protocol,omitempty"`
+}
+
 type tapConversationsIn struct {
 	File   string  `json:"file"`
 	Type   *string `json:"type,omitempty"`
@@ -772,7 +975,7 @@ func handleMetadataFields(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_filter_suggest")
+	out.suggestTool("gowireshark_suggest_filter")
 	parsed := parseOutput(out)
 	return buildResult(out.Text, out), parsed, nil
 }
@@ -798,7 +1001,7 @@ func handleFramesCount(ctx context.Context, _ *mcp.CallToolRequest, in framesCou
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_streams_list")
+	out.suggestTool("gowireshark_list_streams")
 	parsed := parseOutput(out)
 	return buildResult(out.Text, out), parsed, nil
 }
@@ -1025,9 +1228,134 @@ func handleEvidenceBundle(ctx context.Context, _ *mcp.CallToolRequest, in eviden
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_slice_pcap")
+	out.suggestTool("gowireshark_create_pcap_slice")
 	parsed := parseOutput(out)
 	return buildResult(out.Text, out), parsed, nil
+}
+
+func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verifyZeekAlertIn) (*mcp.CallToolResult, map[string]any, error) {
+	file, err := resolvePCAPPath(in.File)
+	if err != nil {
+		return nil, nil, err
+	}
+	filter := strings.TrimSpace(valueOrEmpty(in.Filter))
+	if filter == "" {
+		filter = zeekAlertFilter(in)
+	}
+	if filter == "" {
+		return nil, nil, fmt.Errorf("filter or Zeek alert fields are required")
+	}
+
+	resp := map[string]any{
+		"tool":   "gowireshark_verify_zeek_alert",
+		"file":   file,
+		"filter": filter,
+	}
+	if in.Alert != nil {
+		resp["alert"] = in.Alert
+	}
+
+	if out, err := runGowireshark(ctx, "filter", "validate-detailed", "--expr", filter); err != nil {
+		resp["filter_valid"] = false
+		resp["filter_error"] = err.Error()
+		resp["suggestion"] = "Call gowireshark_suggest_filter and retry with valid Wireshark display fields."
+	} else {
+		resp["filter_valid"] = true
+		resp["filter_validation"] = parseOutput(out)
+	}
+	if out, err := runGowireshark(ctx, "frames", "page", "--file", file, "--page", "1", "--size", "20", "--filter", filter); err != nil {
+		resp["candidate_frames_error"] = err.Error()
+	} else {
+		resp["candidate_frames"] = parseOutput(out)
+	}
+	if out, err := runGowireshark(ctx, "streams", "list", "--file", file, "--filter", filter); err != nil {
+		resp["streams_error"] = err.Error()
+	} else {
+		resp["streams"] = parseOutput(out)
+	}
+	if out, err := runGowireshark(ctx, "expert", "list", "--file", file, "--filter", filter); err != nil {
+		resp["expert_findings_error"] = err.Error()
+	} else {
+		resp["expert_findings"] = parseOutput(out)
+	}
+
+	text, _ := json.MarshalIndent(resp, "", "  ")
+	return textResult(string(text)), resp, nil
+}
+
+func zeekAlertFilter(in verifyZeekAlertIn) string {
+	parts := []string{}
+	srcIP := firstString(in.SrcIP, in.Alert, "src_ip", "source_ip", "id.orig_h", "id_orig_h")
+	dstIP := firstString(in.DstIP, in.Alert, "dst_ip", "destination_ip", "id.resp_h", "id_resp_h")
+	proto := strings.ToLower(firstString(in.Proto, in.Alert, "proto", "protocol"))
+	srcPort := firstInt(in.SrcPort, in.Alert, "src_port", "id.orig_p", "id_orig_p")
+	dstPort := firstInt(in.DstPort, in.Alert, "dst_port", "id.resp_p", "id_resp_p")
+	if srcIP != "" {
+		parts = append(parts, fmt.Sprintf("ip.src == %s", srcIP))
+	}
+	if dstIP != "" {
+		parts = append(parts, fmt.Sprintf("ip.dst == %s", dstIP))
+	}
+	portPrefix := "tcp"
+	if proto == "udp" {
+		portPrefix = "udp"
+	}
+	if srcPort > 0 {
+		parts = append(parts, fmt.Sprintf("%s.srcport == %d", portPrefix, srcPort))
+	}
+	if dstPort > 0 {
+		parts = append(parts, fmt.Sprintf("%s.dstport == %d", portPrefix, dstPort))
+	}
+	if proto == "tcp" || proto == "udp" {
+		parts = append(parts, proto)
+	}
+	return strings.Join(parts, " and ")
+}
+
+func valueOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
+}
+
+func firstString(explicit *string, alert map[string]any, keys ...string) string {
+	if explicit != nil && *explicit != "" {
+		return *explicit
+	}
+	for _, key := range keys {
+		if v, ok := alert[key]; ok {
+			switch val := v.(type) {
+			case string:
+				return val
+			case fmt.Stringer:
+				return val.String()
+			}
+		}
+	}
+	return ""
+}
+
+func firstInt(explicit *int, alert map[string]any, keys ...string) int {
+	if explicit != nil && *explicit > 0 {
+		return *explicit
+	}
+	for _, key := range keys {
+		if v, ok := alert[key]; ok {
+			switch val := v.(type) {
+			case int:
+				return val
+			case int64:
+				return int(val)
+			case float64:
+				return int(val)
+			case string:
+				n, _ := strconv.Atoi(val)
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 func handleTapConversations(ctx context.Context, _ *mcp.CallToolRequest, in tapConversationsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1157,7 +1485,7 @@ func handleStatsSummary(ctx context.Context, _ *mcp.CallToolRequest, in statsSum
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_evidence_bundle")
+	out.suggestTool("gowireshark_create_evidence_bundle")
 	parsed := parseOutput(out)
 	return buildResult(out.Text, out), parsed, nil
 }
@@ -1522,20 +1850,20 @@ func registerPrompts(srv *mcp.Server) {
 					Text: `I need to perform initial triage on a PCAP file. Please follow this workflow:
 
 1. First, gauge the capture size:
-   - Use gowireshark_frames_count to count frames
+   - Use gowireshark_count_frames to count frames
 
 2. Map the traffic structure:
-   - Use gowireshark_streams_list to see TCP/UDP streams
+   - Use gowireshark_list_streams to see TCP/UDP streams
 
 3. Check for anomalies:
-   - Use gowireshark_expert_list to find protocol violations, warnings
+   - Use gowireshark_list_expert_findings to find protocol violations, warnings
 
 4. Get protocol distribution:
-   - Use gowireshark_stats_summary for a statistical overview
+   - Use gowireshark_get_stats_summary for a statistical overview
 
 5. Summarize your findings: protocol distribution, stream count, notable anomalies.
 
-IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_frames_page) only when you need to inspect specific packets.`,
+IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_list_frames) only when you need to inspect specific packets.`,
 				},
 			}},
 		}, nil
@@ -1553,21 +1881,21 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_f
 					Text: `I need to perform a deep-dive analysis on a specific network stream. Please follow this workflow:
 
 1. First, identify the stream ID:
-   - Use gowireshark_streams_list to list all streams
+   - Use gowireshark_list_streams to list all streams
    - Note: only follow streams where streamId >= 0
 
 2. Follow the stream to get reassembled payload:
    - Use gowireshark_follow_stream with protocol=tcp|udp and filter='tcp.stream eq N'
 
 3. Inspect key frames in the stream:
-   - Use gowireshark_frames_page with filter='tcp.stream eq N'
-   - Look at frame content using gowireshark_frames_get
+   - Use gowireshark_list_frames with filter='tcp.stream eq N'
+   - Look at frame content using gowireshark_get_frame
 
 4. Check for any objects embedded in the stream:
-   - Use gowireshark_export_object_list with protocol=http (if HTTP)
+   - Use gowireshark_list_exportable_objects with protocol=http (if HTTP)
 
 5. If HTTP objects found, extract relevant ones:
-   - Use gowireshark_export_object_write
+   - Use gowireshark_write_exported_object
 
 6. Summarize what the stream contains: protocol type, payload content, any extracted objects.`,
 				},
@@ -1587,20 +1915,20 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_f
 					Text: `I need to produce forensic evidence from a PCAP file. Please follow this workflow:
 
 1. Start with triage to understand the capture:
-   - Use gowireshark_frames_count, gowireshark_streams_list, gowireshark_expert_list
-   - Use gowireshark_stats_summary for statistical overview
+   - Use gowireshark_count_frames, gowireshark_list_streams, gowireshark_list_expert_findings
+   - Use gowireshark_get_stats_summary for statistical overview
 
 2. Narrow scope with validated filters:
    - Construct a display filter for the traffic of interest
-   - ALWAYS validate: use gowireshark_filter_validate_detailed with your filter expression
+   - ALWAYS validate: use gowireshark_validate_filter with your filter expression
    - DO NOT guess Wireshark display filter syntax
 
 3. Slice the PCAP to isolate evidence:
-   - Use gowireshark_slice_pcap with your validated filter
-   - Verify the slice with gowireshark_frames_count on the output
+   - Use gowireshark_create_pcap_slice with your validated filter
+   - Verify the slice with gowireshark_count_frames on the output
 
 4. Build the evidence bundle:
-   - Use gowireshark_evidence_bundle with your validated filter
+   - Use gowireshark_create_evidence_bundle with your validated filter
    - This produces conversations, expert infos, protocol hierarchy
 
 5. Present findings:
@@ -1625,14 +1953,14 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_f
 					Text: `I need to extract HTTP objects from a PCAP file. Please follow this workflow:
 
 1. List all exportable HTTP objects:
-   - Use gowireshark_export_object_list with protocol=http
+   - Use gowireshark_list_exportable_objects with protocol=http
 
 2. Review the object list for interesting items:
    - Look at content types, sizes, filenames
    - Identify objects relevant to the investigation
 
 3. Extract specific objects:
-   - Use gowireshark_export_object_write for each interesting object
+   - Use gowireshark_write_exported_object for each interesting object
    - Provide the packetNum (packet number) for each object to extract
    - Output must go to GOWIRESHARK_OUTPUT_DIR
 

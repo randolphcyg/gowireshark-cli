@@ -175,35 +175,35 @@ func TestResolveOutputPathRelativeAndSymlinkEscape(t *testing.T) {
 
 func TestToolRegistration(t *testing.T) {
 	toolNames := []string{
-		"gowireshark_version",
-		"gowireshark_filter_validate",
-		"gowireshark_filter_validate_detailed",
-		"gowireshark_filter_suggest",
-		"gowireshark_metadata_protocols",
-		"gowireshark_metadata_fields",
-		"gowireshark_metadata_field",
-		"gowireshark_frames_count",
-		"gowireshark_frames_page",
-		"gowireshark_frames_get",
-		"gowireshark_frames_batch",
-		"gowireshark_frames_hex",
-		"gowireshark_frames_fields",
-		"gowireshark_streams_list",
-		"gowireshark_conversations_list",
-		"gowireshark_timeline_summary",
-		"gowireshark_files_list",
-		"gowireshark_expert_list",
+		"gowireshark_get_version",
+		"gowireshark_validate_filter",
+		"gowireshark_suggest_filter",
+		"gowireshark_list_protocols",
+		"gowireshark_list_fields",
+		"gowireshark_get_field_info",
+		"gowireshark_count_frames",
+		"gowireshark_list_frames",
+		"gowireshark_get_frame",
+		"gowireshark_get_frames_batch",
+		"gowireshark_get_frame_hex",
+		"gowireshark_get_frame_fields",
+		"gowireshark_list_streams",
+		"gowireshark_list_conversations",
+		"gowireshark_get_timeline_summary",
+		"gowireshark_list_files",
+		"gowireshark_list_expert_findings",
 		"gowireshark_follow_stream",
-		"gowireshark_slice_pcap",
-		"gowireshark_evidence_bundle",
-		"gowireshark_tap_conversations",
-		"gowireshark_tap_endpoints",
-		"gowireshark_srt_list",
-		"gowireshark_export_object_list",
-		"gowireshark_export_object_write",
-		"gowireshark_stats_summary",
+		"gowireshark_create_pcap_slice",
+		"gowireshark_create_evidence_bundle",
+		"gowireshark_verify_zeek_alert",
+		"gowireshark_list_tap_conversations",
+		"gowireshark_list_tap_endpoints",
+		"gowireshark_list_service_response_times",
+		"gowireshark_list_exportable_objects",
+		"gowireshark_write_exported_object",
+		"gowireshark_get_stats_summary",
 		"gowireshark_extract_files",
-		"gowireshark_doctor",
+		"gowireshark_health_check",
 	}
 
 	seen := make(map[string]bool)
@@ -218,11 +218,12 @@ func TestToolRegistration(t *testing.T) {
 	}
 
 	expectedNewTools := []string{
-		"gowireshark_metadata_protocols",
-		"gowireshark_metadata_fields",
-		"gowireshark_stats_summary",
+		"gowireshark_list_protocols",
+		"gowireshark_list_fields",
+		"gowireshark_get_stats_summary",
 		"gowireshark_extract_files",
-		"gowireshark_doctor",
+		"gowireshark_health_check",
+		"gowireshark_verify_zeek_alert",
 	}
 	for _, name := range expectedNewTools {
 		if !seen[name] {
@@ -257,7 +258,7 @@ func TestTruncationMetadata(t *testing.T) {
 		Truncated:         true,
 		MaxOutputBytes:    1024,
 		OriginalBytes:     2048,
-		SuggestedNextTool: "gowireshark_slice_pcap",
+		SuggestedNextTool: "gowireshark_create_pcap_slice",
 	}
 
 	result := buildResult(out.Text, out)
@@ -277,8 +278,8 @@ func TestTruncationMetadata(t *testing.T) {
 	if result.Meta["originalBytes"] != int64(2048) {
 		t.Errorf("Meta.originalBytes = %v, want 2048", result.Meta["originalBytes"])
 	}
-	if result.Meta["suggestedNextTool"] != "gowireshark_slice_pcap" {
-		t.Errorf("Meta.suggestedNextTool = %v, want gowireshark_slice_pcap", result.Meta["suggestedNextTool"])
+	if result.Meta["suggestedNextTool"] != "gowireshark_create_pcap_slice" {
+		t.Errorf("Meta.suggestedNextTool = %v, want gowireshark_create_pcap_slice", result.Meta["suggestedNextTool"])
 	}
 
 	if !strings.Contains(out.Text, "truncated") {
@@ -534,8 +535,30 @@ func TestToolSchemasAdvertiseConstraints(t *testing.T) {
 	for _, tool := range res.Tools {
 		tools[tool.Name] = tool
 	}
+	for _, name := range []string{
+		"gowireshark_count_frames",
+		"gowireshark_list_frames",
+		"gowireshark_get_frame",
+		"gowireshark_health_check",
+		"gowireshark_verify_zeek_alert",
+	} {
+		if tools[name] == nil {
+			t.Fatalf("expected renamed tool %s to be listed", name)
+		}
+	}
+	for _, old := range []string{
+		"gowireshark_frames_count",
+		"gowireshark_frames_page",
+		"gowireshark_frames_get",
+		"gowireshark_doctor",
+		"gowireshark_expert_list",
+	} {
+		if tools[old] != nil {
+			t.Fatalf("old tool %s should not be listed", old)
+		}
+	}
 
-	framesPage := schemaMap(t, tools["gowireshark_frames_page"].InputSchema)
+	framesPage := schemaMap(t, tools["gowireshark_list_frames"].InputSchema)
 	requireContains(t, framesPage["required"], "file")
 	page := propertySchema(t, framesPage, "page")
 	if page["minimum"].(float64) != 1 {
@@ -547,16 +570,50 @@ func TestToolSchemasAdvertiseConstraints(t *testing.T) {
 	requireContains(t, protocol["enum"], "tcp")
 	requireContains(t, protocol["enum"], "udp")
 
-	tap := schemaMap(t, tools["gowireshark_tap_endpoints"].InputSchema)
+	tap := schemaMap(t, tools["gowireshark_list_tap_endpoints"].InputSchema)
 	tapType := propertySchema(t, tap, "type")
 	requireContains(t, tapType["enum"], "eth")
 	requireContains(t, tapType["enum"], "udp")
 
-	exportWrite := schemaMap(t, tools["gowireshark_export_object_write"].InputSchema)
+	exportWrite := schemaMap(t, tools["gowireshark_write_exported_object"].InputSchema)
 	requireContains(t, exportWrite["required"], "packetNum")
 	packetNum := propertySchema(t, exportWrite, "packetNum")
 	if packetNum["minimum"].(float64) != 1 {
 		t.Fatalf("packetNum minimum = %v, want 1", packetNum["minimum"])
+	}
+
+	verify := schemaMap(t, tools["gowireshark_verify_zeek_alert"].InputSchema)
+	requireContains(t, verify["required"], "file")
+}
+
+func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "calls.jsonl")
+	originalLog := os.Getenv("MCP_CALL_LOG_PATH")
+	os.Setenv("MCP_CALL_LOG_PATH", logPath)
+	defer os.Setenv("MCP_CALL_LOG_PATH", originalLog)
+
+	handler := tracedTool("gowireshark_count_frames", func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, map[string]any, error) {
+		return nil, nil, os.ErrNotExist
+	})
+	result, _, err := handler(context.Background(), &mcp.CallToolRequest{}, emptyIn{})
+	if err != nil {
+		t.Fatalf("handler returned protocol error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected tool error result")
+	}
+	if result.StructuredContent == nil {
+		t.Fatal("expected structured error envelope")
+	}
+	if result.Meta["trace_id"] == "" {
+		t.Fatal("expected trace_id metadata")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
+	if !strings.Contains(string(data), `"tool_name":"gowireshark_count_frames"`) {
+		t.Fatalf("call log missing tool name: %s", data)
 	}
 }
 
