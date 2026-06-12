@@ -1,4 +1,4 @@
 interface:
-  display_name: gowireshark
-  short_description: Analyze pcap files with the gowireshark CLI
-  default_prompt: Analyze this packet capture with gowireshark and summarize the important findings.
+  display_name: epan
+  short_description: Analyze pcap files with the epan CLI
+  default_prompt: Analyze this packet capture with epan and summarize the important findings.

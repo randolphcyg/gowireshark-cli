@@ -1,40 +1,40 @@
-# gowireshark Agent PCAP Analysis Rules
+# epan Agent PCAP Analysis Rules
 
-Use `gowireshark` as a bounded forensic lens. Prefer small, reproducible queries over broad packet dumps.
+Use `epan` as a bounded forensic lens. Prefer small, reproducible queries over broad packet dumps.
 
 ## Default workflow
 
 1. Gauge capture size first:
    ```bash
-   gowireshark frames count --file <pcap>
-   gowireshark stats --file <pcap>
+   epan frames count --file <pcap>
+   epan stats --file <pcap>
    ```
 2. Map traffic:
    ```bash
-   gowireshark streams list --file <pcap>
-   gowireshark traffic conversations list --file <pcap>
+   epan streams list --file <pcap>
+   epan traffic conversations list --file <pcap>
    ```
 3. Check anomalies:
    ```bash
-   gowireshark expert list --file <pcap>
+   epan expert list --file <pcap>
    ```
 4. Validate filters before use:
    ```bash
-   gowireshark filter validate-detailed --expr '<display-filter>'
+   epan filter validate-detailed --expr '<display-filter>'
    ```
 5. Follow only mapped streams where `streamId >= 0`:
    ```bash
-   gowireshark follow --file <pcap> --protocol tcp --filter 'tcp.stream eq N'
+   epan follow --file <pcap> --protocol tcp --filter 'tcp.stream eq N'
    ```
 6. Produce evidence after narrowing scope:
    ```bash
-   gowireshark slice pcap --file <pcap> --filter '<display-filter>' --out evidence.pcap
-   gowireshark evidence bundle --file <pcap> --filter '<display-filter>'
+   epan slice pcap --file <pcap> --filter '<display-filter>' --out evidence.pcap
+   epan evidence bundle --file <pcap> --filter '<display-filter>'
    ```
 7. Extract files when needed:
    ```bash
-   gowireshark extract --file <pcap> --out extracted-files/
-   gowireshark export-object list --file <pcap> --protocol http
+   epan extract --file <pcap> --out extracted-files/
+   epan export-object list --file <pcap> --protocol http
    ```
 
 ## Do not

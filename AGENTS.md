@@ -1,39 +1,39 @@
-# gowireshark-cli Agent Rules
+# epan-cli Agent Rules
 
-Use `gowireshark` as a bounded forensic toolbox. Prefer the smallest command that answers the question and preserve reproducible evidence.
+Use `epan` as a bounded forensic toolbox. Prefer the smallest command that answers the question and preserve reproducible evidence.
 
 ## Default PCAP Workflow
 
 1. Gauge capture size first:
    ```bash
-   gowireshark frames count --file <pcap>
-   gowireshark stats --file <pcap>
+   epan frames count --file <pcap>
+   epan stats --file <pcap>
    ```
 2. Map traffic structure:
    ```bash
-   gowireshark streams list --file <pcap>
+   epan streams list --file <pcap>
    ```
 3. Check protocol and dissector anomalies:
    ```bash
-   gowireshark expert list --file <pcap>
+   epan expert list --file <pcap>
    ```
 4. Follow only mapped streams where `streamId >= 0`:
    ```bash
-   gowireshark follow --file <pcap> --protocol tcp --filter 'tcp.stream eq N'
+   epan follow --file <pcap> --protocol tcp --filter 'tcp.stream eq N'
    ```
 5. Validate new display filters before using them:
    ```bash
-   gowireshark filter validate-detailed --expr '<expr>'
+   epan filter validate-detailed --expr '<expr>'
    ```
 6. Produce evidence only after narrowing scope:
    ```bash
-   gowireshark slice pcap --file <pcap> --filter '<expr>' --out evidence.pcap
-   gowireshark evidence bundle --file <pcap> --filter '<expr>'
+   epan slice pcap --file <pcap> --filter '<expr>' --out evidence.pcap
+   epan evidence bundle --file <pcap> --filter '<expr>'
    ```
 7. Extract files when needed:
    ```bash
-   gowireshark extract --file <pcap> --out extracted-files/
-   gowireshark export-object list --file <pcap> --protocol http
+   epan extract --file <pcap> --out extracted-files/
+   epan export-object list --file <pcap> --protocol http
    ```
 
 ## Output Discipline
@@ -45,7 +45,7 @@ Use `gowireshark` as a bounded forensic toolbox. Prefer the smallest command tha
 
 ## MCP Tool Names
 
-MCP uses breaking, Agent-oriented names. Prefer `gowireshark_health_check`, `gowireshark_count_frames`, `gowireshark_list_streams`, `gowireshark_list_expert_findings`, `gowireshark_validate_filter`, `gowireshark_verify_zeek_alert`, `gowireshark_create_pcap_slice`, and `gowireshark_create_evidence_bundle`. Do not use removed legacy names.
+MCP uses breaking, Agent-oriented names. Prefer `health_check`, `count_frames`, `list_streams`, `list_expert_findings`, `validate_filter`, `verify_zeek_alert`, `create_pcap_slice`, and `create_evidence_bundle`. Do not use removed legacy names.
 
 ## Validation
 
@@ -55,4 +55,4 @@ Run before handing off CLI changes:
 go test ./...
 ```
 
-Do not commit a `replace github.com/randolphcyg/gowireshark => ../gowireshark` directive in `go.mod`. Use a parent `go.work` file for local multi-repo development; release builds use the tagged SDK dependency and build scripts may inject temporary local replaces internally.
+Do not commit a `replace github.com/randolphcyg/epan => ../epan` directive in `go.mod`. Use a parent `go.work` file for local multi-repo development; release builds use the tagged SDK dependency and build scripts may inject temporary local replaces internally.

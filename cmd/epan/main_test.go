@@ -8,7 +8,7 @@ import (
 )
 
 func TestUsageContainsStatsAndExtract(t *testing.T) {
-	usage := "usage: gowireshark <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>"
+	usage := "usage: epan <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>"
 	if !strings.Contains(usage, "stats") {
 		t.Error("usage should contain stats")
 	}

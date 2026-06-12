@@ -1,9 +1,9 @@
-# gowireshark Codex Rules
+# epan Codex Rules
 
 Use the packaged wrapper, not the raw binary:
 
 ```bash
-/path/to/gowireshark-cli-<target>/bin/gowireshark-env version
+/path/to/epan-<target>/bin/epan-env version
 ```
 
 For PCAP work, follow `agents/pcap-analysis-rules.md`:

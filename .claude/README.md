@@ -5,7 +5,7 @@ Claude Code reads project instructions from `CLAUDE.md`. This package includes a
 Project-scoped MCP setup:
 
 ```bash
-cp /path/to/gowireshark-cli-<target>/.mcp.json.template ./.mcp.json
+cp /path/to/epan-<target>/.mcp.json.template ./.mcp.json
 # edit absolute paths
 claude --debug mcp
 ```

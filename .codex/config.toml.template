@@ -1,13 +1,13 @@
 # Copy into your Codex config only if your Codex runtime supports MCP servers.
 # Replace all absolute paths before use. Do not commit personal config.
 
-[mcp_servers.gowireshark]
+[mcp_servers.epan]
 type = "stdio"
-command = "/ABSOLUTE/PATH/TO/gowireshark-cli-<target>/bin/gowireshark-mcp-env"
+command = "/ABSOLUTE/PATH/TO/epan-<target>/bin/epan-mcp-env"
 args = []
 
-[mcp_servers.gowireshark.env]
-GOWIRESHARK_PCAP_DIR = "/ABSOLUTE/PATH/TO/pcaps"
-GOWIRESHARK_OUTPUT_DIR = "/ABSOLUTE/PATH/TO/gowireshark-output"
-GOWIRESHARK_TIMEOUT = "120s"
-GOWIRESHARK_MAX_OUTPUT_BYTES = "8388608"
+[mcp_servers.epan.env]
+EPAN_PCAP_DIR = "/ABSOLUTE/PATH/TO/pcaps"
+EPAN_OUTPUT_DIR = "/ABSOLUTE/PATH/TO/epan-output"
+EPAN_TIMEOUT = "120s"
+EPAN_MAX_OUTPUT_BYTES = "8388608"

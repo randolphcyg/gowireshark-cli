@@ -89,11 +89,11 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
     CGO_ENABLED=1 \
     GOPROXY=https://goproxy.cn,direct \
     CGO_CFLAGS="-I/app/include -I/app/include/wireshark -I/app/include/wireshark/epan -I/app/include/wireshark/wiretap -I/app/include/wireshark/wsutil" \
-    CGO_LDFLAGS="-L/app/libs -Wl,-rpath,/app/libs -lwiretap -lwsutil -lwireshark -lpcap -lglib-2.0" \
+    CGO_LDFLAGS="-L/app/libs -Wl,-rpath,/app/libs -lwiretap -lwsutil -lwireshark -lpcap -lglib-2.0 -lm" \
     LD_LIBRARY_PATH="/app/libs" \
     WIRESHARK_DATA_DIR="/app/share/wireshark" \
     WIRESHARK_LIB_DIR="/app/libs" \
-    WIRESHARK_CONF_DIR="/tmp/gowireshark_conf"
+    WIRESHARK_CONF_DIR="/tmp/epan_conf"
 
 COPY --from=wireshark-builder /app/libs/ /app/libs/
 COPY --from=wireshark-builder /app/include/ /app/include/
@@ -101,16 +101,16 @@ COPY --from=wireshark-builder /opt/wireshark/build/share/ /app/share/
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod edit -dropreplace github.com/randolphcyg/gowireshark && go mod download
+RUN go mod edit -dropreplace github.com/randolphcyg/ && go mod download
 COPY . .
-RUN go mod edit -dropreplace github.com/randolphcyg/gowireshark && go mod download github.com/randolphcyg/gowireshark
+RUN go mod edit -dropreplace github.com/randolphcyg/ && go mod download github.com/randolphcyg/gowireshark
 
 RUN mkdir -p /out/bin /out/lib /out/share && \
-    go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /out/bin/gowireshark ./cmd/gowireshark && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /out/bin/gowireshark-mcp ./cmd/gowireshark-mcp && \
+    go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /out/bin/epan ./cmd/epan && \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /out/bin/epan-mcp ./cmd/epan-mcp && \
     cp -d /app/libs/lib*.so* /out/lib/ && \
     cp -R /app/share/wireshark /out/share/ && \
-    for f in /out/bin/gowireshark /out/lib/*.so*; do \
+    for f in /out/bin/epan /out/lib/*.so*; do \
       ldd "$f" 2>/dev/null | awk '/=> \/.*\.so/ {print $(NF-1)} /^\/.*\.so/ {print $1}' || true; \
     done | sort -u | while read -r lib; do \
       case "$lib" in \
@@ -118,22 +118,40 @@ RUN mkdir -p /out/bin /out/lib /out/share && \
       esac; \
       cp -L "$lib" /out/lib/ 2>/dev/null || true; \
     done && \
-    chmod +x /out/bin/gowireshark /out/bin/gowireshark-mcp
+    chmod +x /out/bin/epan /out/bin/epan-mcp
 
 FROM ubuntu:24.04 AS runtime
 ENV LD_LIBRARY_PATH=/usr/local/lib \
     WIRESHARK_DATA_DIR=/usr/local/share/wireshark \
     WIRESHARK_LIB_DIR=/usr/local/lib \
-    WIRESHARK_CONF_DIR=/tmp/gowireshark_conf \
-    GOWIRESHARK_PCAP_DIR=/app/pcaps \
-    GOWIRESHARK_OUTPUT_DIR=/app/output
-COPY --from=go-builder /out/bin/gowireshark /usr/local/bin/gowireshark
-COPY --from=go-builder /out/bin/gowireshark-mcp /usr/local/bin/gowireshark-mcp
+    WIRESHARK_CONF_DIR=/tmp/epan_conf \
+    EPAN_PCAP_DIR=/app/pcaps \
+    EPAN_OUTPUT_DIR=/app/output
+COPY --from=go-builder /out/bin/epan /usr/local/bin/epan
+COPY --from=go-builder /out/bin/epan-mcp /usr/local/bin/epan-mcp
 COPY --from=go-builder /out/lib/ /usr/local/lib/
 COPY --from=go-builder /out/share/wireshark /usr/local/share/wireshark
-RUN mkdir -p /tmp/gowireshark_conf /app/pcaps /app/output && ldconfig || true
-ENTRYPOINT ["gowireshark"]
+RUN mkdir -p /tmp/epan_conf /app/pcaps /app/output && ldconfig || true
+ENTRYPOINT ["epan"]
 CMD ["version"]
+
+FROM ubuntu:24.04 AS mcp-http-runtime
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+ENV LD_LIBRARY_PATH=/usr/local/lib \
+    WIRESHARK_DATA_DIR=/usr/local/share/wireshark \
+    WIRESHARK_LIB_DIR=/usr/local/lib \
+    WIRESHARK_CONF_DIR=/tmp/epan_conf \
+    EPAN_PCAP_DIR=/pcaps \
+    EPAN_OUTPUT_DIR=/outputs/epan
+COPY --from=go-builder /out/bin/epan /usr/local/bin/epan
+COPY --from=go-builder /out/bin/epan-mcp /usr/local/bin/epan-mcp
+COPY --from=go-builder /out/lib/ /usr/local/lib/
+COPY --from=go-builder /out/share/wireshark /usr/local/share/wireshark
+RUN mkdir -p /tmp/epan_conf /pcaps /outputs/epan && ldconfig || true
+ENTRYPOINT ["epan-mcp"]
+CMD ["--transport", "http", "--listen", ":8002", "--endpoint", "/mcp"]
+EXPOSE 8002
 
 FROM scratch AS package-export
 COPY --from=go-builder /out/bin/ /bin/

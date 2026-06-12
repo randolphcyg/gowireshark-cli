@@ -1,13 +1,34 @@
 {
   "mcpServers": {
-    "gowireshark": {
-      "command": "/ABSOLUTE/PATH/TO/gowireshark-cli-<target>/bin/gowireshark-mcp-env",
+    "_comment": "=== epan MCP Server Configuration ===",
+    "_comment_env": "Environment variables: EPAN_BIN, EPAN_PCAP_DIR, EPAN_OUTPUT_DIR, EPAN_TIMEOUT, EPAN_MAX_OUTPUT_BYTES",
+    "_comment_env2": "MCP debug/logging vars: MCP_CALL_LOG_PATH (JSONL audit log), MCP_TRACE_ID",
+
+    "epan": {
+      "command": "/ABSOLUTE/PATH/TO/epan-cli-<target>/bin/epan-mcp-env",
       "args": [],
       "env": {
-        "GOWIRESHARK_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
-        "GOWIRESHARK_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/gowireshark-output",
-        "GOWIRESHARK_TIMEOUT": "120s",
-        "GOWIRESHARK_MAX_OUTPUT_BYTES": "8388608"
+        "EPAN_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
+        "EPAN_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/epan-output",
+        "EPAN_TIMEOUT": "120s",
+        "EPAN_MAX_OUTPUT_BYTES": "8388608"
+      }
+    },
+
+    "epan-http": {
+      "command": "/ABSOLUTE/PATH/TO/epan-cli-<target>/bin/epan-mcp-env",
+      "args": [
+        "--transport=http",
+        "--listen=127.0.0.1:8002",
+        "--endpoint=/mcp",
+        "--token=替换为你的安全令牌"
+      ],
+      "env": {
+        "EPAN_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
+        "EPAN_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/epan-output",
+        "EPAN_TIMEOUT": "120s",
+        "EPAN_MAX_OUTPUT_BYTES": "8388608",
+        "MCP_CALL_LOG_PATH": "/var/log/epan/mcp-audit.jsonl"
       }
     }
   }

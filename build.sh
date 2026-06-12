@@ -98,14 +98,14 @@ done
 mkdir -p "$DIST_DIR"
 
 package_dir() {
-  echo "$DIST_DIR/gowireshark-cli-$1"
+  echo "$DIST_DIR/epan-$1"
 }
 
 prepare_package() {
   local target="$1"
   local pkg
   pkg="$(package_dir "$target")"
-  rm -rf "$pkg" "$DIST_DIR/gowireshark-cli-$target.tar.gz" "$DIST_DIR/gowireshark-cli-$target.zip"
+  rm -rf "$pkg" "$DIST_DIR/epan-$target.tar.gz" "$DIST_DIR/epan-$target.zip"
   mkdir -p "$pkg/bin" "$pkg/lib" "$pkg/share"
   for agent_dir in .trae .codex .claude agents; do
     if [[ -d "$SCRIPT_DIR/$agent_dir" ]]; then
@@ -117,7 +117,7 @@ prepare_package() {
   [[ -f "$SCRIPT_DIR/.mcp.json.template" ]] && cp "$SCRIPT_DIR/.mcp.json.template" "$pkg/.mcp.json.template"
   cp "$SCRIPT_DIR/README.md" "$pkg/README.md"
   cat > "$pkg/PACKAGE_INFO" <<INFO
-name=gowireshark-cli
+name=epan
 target=$target
 version=$VERSION
 built_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -128,10 +128,10 @@ INFO
 ensure_sdk_dir() {
   if [[ ! -f "$SDK_DIR/go.mod" ]]; then
     cat >&2 <<ERR
-missing local gowireshark SDK: $SDK_DIR
-Set GOWIRESHARK_SDK_DIR or place the SDK beside this repo:
+missing local epan SDK: $SDK_DIR
+Set SDK_DIR or place the SDK beside this repo:
   /path/to/gowireshark
-  /path/to/gowireshark-cli
+  /path/to/epan
 ERR
     exit 1
   fi
@@ -141,7 +141,7 @@ local_sdk_modfile() {
   local target="$1" modfile
   ensure_sdk_dir
   mkdir -p "$DIST_DIR/.mod"
-  modfile="$DIST_DIR/.mod/gowireshark-cli-$target.mod"
+  modfile="$DIST_DIR/.mod/epan-$target.mod"
   cp "$SCRIPT_DIR/go.mod" "$modfile"
   go mod edit -modfile="$modfile" -dropreplace github.com/randolphcyg/gowireshark 2>/dev/null || true
   go mod edit -modfile="$modfile" -replace "github.com/randolphcyg/gowireshark=$SDK_DIR"
@@ -167,68 +167,68 @@ ERR
 write_unix_wrappers() {
   local pkg="$1"
   local lib_var="$2"
-  cat > "$pkg/bin/gowireshark-env" <<EOF2
+  cat > "$pkg/bin/epan-env" <<EOF2
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 export $lib_var="\$ROOT/lib\${$lib_var:+:\$$lib_var}"
 export WIRESHARK_LIB_DIR="\$ROOT/lib"
 export WIRESHARK_DATA_DIR="\$ROOT/share/wireshark"
-export WIRESHARK_CONF_DIR="\${WIRESHARK_CONF_DIR:-/tmp/gowireshark_conf}"
-export GOWIRESHARK_BIN="\$ROOT/bin/gowireshark"
-export GOWIRESHARK_PCAP_DIR="\${GOWIRESHARK_PCAP_DIR:-\$ROOT/pcaps}"
-export GOWIRESHARK_OUTPUT_DIR="\${GOWIRESHARK_OUTPUT_DIR:-\$ROOT/output}"
-mkdir -p "\$WIRESHARK_CONF_DIR" "\$GOWIRESHARK_PCAP_DIR" "\$GOWIRESHARK_OUTPUT_DIR"
-exec "\$ROOT/bin/gowireshark" "\$@"
+export WIRESHARK_CONF_DIR="\${WIRESHARK_CONF_DIR:-/tmp/epan_conf}"
+export EPAN_BIN="\$ROOT/bin/epan"
+export EPAN_PCAP_DIR="\${EPAN_PCAP_DIR:-\$ROOT/pcaps}"
+export EPAN_OUTPUT_DIR="\${EPAN_OUTPUT_DIR:-\$ROOT/output}"
+mkdir -p "\$WIRESHARK_CONF_DIR" "\$EPAN_PCAP_DIR" "\$EPAN_OUTPUT_DIR"
+exec "\$ROOT/bin/epan" "\$@"
 EOF2
-  cat > "$pkg/bin/gowireshark-mcp-env" <<EOF2
+  cat > "$pkg/bin/epan-mcp-env" <<EOF2
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
 export $lib_var="\$ROOT/lib\${$lib_var:+:\$$lib_var}"
 export WIRESHARK_LIB_DIR="\$ROOT/lib"
 export WIRESHARK_DATA_DIR="\$ROOT/share/wireshark"
-export WIRESHARK_CONF_DIR="\${WIRESHARK_CONF_DIR:-/tmp/gowireshark_conf}"
-export GOWIRESHARK_BIN="\$ROOT/bin/gowireshark-env"
-export GOWIRESHARK_PCAP_DIR="\${GOWIRESHARK_PCAP_DIR:-\$ROOT/pcaps}"
-export GOWIRESHARK_OUTPUT_DIR="\${GOWIRESHARK_OUTPUT_DIR:-\$ROOT/output}"
-mkdir -p "\$WIRESHARK_CONF_DIR" "\$GOWIRESHARK_PCAP_DIR" "\$GOWIRESHARK_OUTPUT_DIR"
-exec "\$ROOT/bin/gowireshark-mcp" "\$@"
+export WIRESHARK_CONF_DIR="\${WIRESHARK_CONF_DIR:-/tmp/epan_conf}"
+export EPAN_BIN="\$ROOT/bin/epan-env"
+export EPAN_PCAP_DIR="\${EPAN_PCAP_DIR:-\$ROOT/pcaps}"
+export EPAN_OUTPUT_DIR="\${EPAN_OUTPUT_DIR:-\$ROOT/output}"
+mkdir -p "\$WIRESHARK_CONF_DIR" "\$EPAN_PCAP_DIR" "\$EPAN_OUTPUT_DIR"
+exec "\$ROOT/bin/epan-mcp" "\$@"
 EOF2
-  chmod +x "$pkg/bin/gowireshark-env" "$pkg/bin/gowireshark-mcp-env"
+  chmod +x "$pkg/bin/epan-env" "$pkg/bin/epan-mcp-env"
 }
 
 write_windows_wrappers() {
   local pkg="$1"
-  cat > "$pkg/bin/gowireshark-env.cmd" <<'EOF2'
+  cat > "$pkg/bin/epan-env.cmd" <<'EOF2'
 @echo off
 set ROOT=%~dp0..
 set PATH=C:\Windows\System32;C:\Windows;%ROOT%\lib;%ROOT%\bin;%PATH%
 set WIRESHARK_LIB_DIR=%ROOT%\lib
 set WIRESHARK_DATA_DIR=%ROOT%\share\wireshark
-if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\gowireshark_conf
-set GOWIRESHARK_BIN=%ROOT%\bin\gowireshark.exe
-if "%GOWIRESHARK_PCAP_DIR%"=="" set GOWIRESHARK_PCAP_DIR=%ROOT%\pcaps
-if "%GOWIRESHARK_OUTPUT_DIR%"=="" set GOWIRESHARK_OUTPUT_DIR=%ROOT%\output
+if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\epan_conf
+set EPAN_BIN=%ROOT%\bin\epan.exe
+if "%EPAN_PCAP_DIR%"=="" set EPAN_PCAP_DIR=%ROOT%\pcaps
+if "%EPAN_OUTPUT_DIR%"=="" set EPAN_OUTPUT_DIR=%ROOT%\output
 if not exist "%WIRESHARK_CONF_DIR%" mkdir "%WIRESHARK_CONF_DIR%"
-if not exist "%GOWIRESHARK_PCAP_DIR%" mkdir "%GOWIRESHARK_PCAP_DIR%"
-if not exist "%GOWIRESHARK_OUTPUT_DIR%" mkdir "%GOWIRESHARK_OUTPUT_DIR%"
-"%ROOT%\bin\gowireshark.exe" %*
+if not exist "%EPAN_PCAP_DIR%" mkdir "%EPAN_PCAP_DIR%"
+if not exist "%EPAN_OUTPUT_DIR%" mkdir "%EPAN_OUTPUT_DIR%"
+"%ROOT%\bin\epan.exe" %*
 EOF2
-  cat > "$pkg/bin/gowireshark-mcp-env.cmd" <<'EOF2'
+  cat > "$pkg/bin/epan-mcp-env.cmd" <<'EOF2'
 @echo off
 set ROOT=%~dp0..
 set PATH=C:\Windows\System32;C:\Windows;%ROOT%\lib;%ROOT%\bin;%PATH%
 set WIRESHARK_LIB_DIR=%ROOT%\lib
 set WIRESHARK_DATA_DIR=%ROOT%\share\wireshark
-if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\gowireshark_conf
-set GOWIRESHARK_BIN=%ROOT%\bin\gowireshark-env.cmd
-if "%GOWIRESHARK_PCAP_DIR%"=="" set GOWIRESHARK_PCAP_DIR=%ROOT%\pcaps
-if "%GOWIRESHARK_OUTPUT_DIR%"=="" set GOWIRESHARK_OUTPUT_DIR=%ROOT%\output
+if "%WIRESHARK_CONF_DIR%"=="" set WIRESHARK_CONF_DIR=%TEMP%\epan_conf
+set EPAN_BIN=%ROOT%\bin\epan-env.cmd
+if "%EPAN_PCAP_DIR%"=="" set EPAN_PCAP_DIR=%ROOT%\pcaps
+if "%EPAN_OUTPUT_DIR%"=="" set EPAN_OUTPUT_DIR=%ROOT%\output
 if not exist "%WIRESHARK_CONF_DIR%" mkdir "%WIRESHARK_CONF_DIR%"
-if not exist "%GOWIRESHARK_PCAP_DIR%" mkdir "%GOWIRESHARK_PCAP_DIR%"
-if not exist "%GOWIRESHARK_OUTPUT_DIR%" mkdir "%GOWIRESHARK_OUTPUT_DIR%"
-"%ROOT%\bin\gowireshark-mcp.exe" %*
+if not exist "%EPAN_PCAP_DIR%" mkdir "%EPAN_PCAP_DIR%"
+if not exist "%EPAN_OUTPUT_DIR%" mkdir "%EPAN_OUTPUT_DIR%"
+"%ROOT%\bin\epan-mcp.exe" %*
 EOF2
 }
 
@@ -336,15 +336,15 @@ archive_package() {
         zip_cmd="/c/msys32/usr/bin/zip"
       fi
       if [[ -n "$zip_cmd" ]]; then
-        (cd "$DIST_DIR" && "$zip_cmd" -qr "gowireshark-cli-$target.zip" "gowireshark-cli-$target")
-        echo "  -> $DIST_DIR/gowireshark-cli-$target.zip"
+        (cd "$DIST_DIR" && "$zip_cmd" -qr "epan-$target.zip" "epan-$target")
+        echo "  -> $DIST_DIR/epan-$target.zip"
       else
         echo "zip not found; leaving package dir only: $pkg" >&2
       fi
       ;;
     *)
-      tar -C "$DIST_DIR" -czf "$DIST_DIR/gowireshark-cli-$target.tar.gz" "gowireshark-cli-$target"
-      echo "  -> $DIST_DIR/gowireshark-cli-$target.tar.gz"
+      tar -C "$DIST_DIR" -czf "$DIST_DIR/epan-$target.tar.gz" "epan-$target"
+      echo "  -> $DIST_DIR/epan-$target.tar.gz"
       ;;
   esac
 }
@@ -360,8 +360,8 @@ build_darwin_arm64() {
   pkg="$(prepare_package "$target")"
   cp -R "$SDK_DIR/local_deps/install/share/wireshark" "$pkg/share/"
   cp -L "$SDK_DIR/local_deps/install/lib"/*.dylib "$pkg/lib/"
-  GOWORK=off CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -modfile="$modfile" -mod=mod -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/gowireshark" ./cmd/gowireshark
-  GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -modfile="$modfile" -mod=mod -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/gowireshark-mcp" ./cmd/gowireshark-mcp
+  GOWORK=off CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -modfile="$modfile" -mod=mod -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/epan" ./cmd/epan
+  GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -modfile="$modfile" -mod=mod -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/epan-mcp" ./cmd/epan-mcp
   copy_darwin_deps_recursive "$pkg"
   write_unix_wrappers "$pkg" "DYLD_LIBRARY_PATH"
   archive_package "$target"
@@ -382,7 +382,7 @@ build_linux() {
   cp -R "$tmp/lib/." "$pkg/lib/"
   cp -R "$tmp/share/." "$pkg/share/"
   rm -rf "$tmp"
-  chmod +x "$pkg/bin/gowireshark" "$pkg/bin/gowireshark-mcp"
+  chmod +x "$pkg/bin/epan" "$pkg/bin/epan-mcp"
   write_unix_wrappers "$pkg" "LD_LIBRARY_PATH"
   archive_package "$target"
 }
@@ -398,8 +398,8 @@ build_windows_amd64() {
     echo "windows-amd64 requires dev_env.ps1 environment. Run init_win_dev.ps1 first." >&2
     exit 1
   fi
-  CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/gowireshark.exe" ./cmd/gowireshark
-  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/gowireshark-mcp.exe" ./cmd/gowireshark-mcp
+  CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/epan.exe" ./cmd/epan
+  CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o "$pkg/bin/epan-mcp.exe" ./cmd/epan-mcp
   cp -R "$WIRESHARK_DATA_DIR" "$pkg/share/wireshark"
   cp -R "$WIRESHARK_LIB_DIR"/* "$pkg/lib/"
   
@@ -427,7 +427,7 @@ build_target() {
   esac
 }
 
-echo "=== gowireshark-cli release build ==="
+echo "=== epan release build ==="
 echo "Version: $VERSION"
 echo "Targets: ${TARGETS[*]}"
 echo "Package archives: $([[ $NO_PACKAGE == true ]] && echo disabled || echo enabled)"

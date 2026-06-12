@@ -4,7 +4,7 @@
 .idea/
 .kiro/
 .codegraph/
-.trae
+.trae/
 .claude/settings.local.json
 .claude/*.local.json
 
@@ -33,8 +33,6 @@ dev_env.ps1
 dev.env
 
 # Local Agent / IDE configuration
-.trae/mcp.json
-.trae/*.local.json
 .codex/*.local.*
 .mcp.json
 
@@ -50,10 +48,10 @@ coverage.out
 *.coverprofile
 *.test
 *.out
-/gowireshark
-/gowireshark-mcp
-/gowireshark-bench
-/gowireshark-bench-*
+/epan
+/epan-mcp
+/epan-bench
+/epan-bench-*
 
 # PCAP files
 *.pcap

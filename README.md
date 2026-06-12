@@ -1,6 +1,6 @@
-# gowireshark-cli
+# epan
 
-CLI frontend and MCP server for `gowireshark`. All commands emit JSON on stdout and diagnostics on stderr.
+CLI frontend and MCP server for `epan`. All commands emit JSON on stdout and diagnostics on stderr.
 
 ## Build Matrix
 
@@ -8,7 +8,7 @@ CLI frontend and MCP server for `gowireshark`. All commands emit JSON on stdout 
 
 | Target | Host requirement | Output |
 |---|---|---|
-| `darwin-arm64` | macOS Apple Silicon + initialized `../gowireshark` SDK dev env | `.tar.gz` |
+| `darwin-arm64` | macOS Apple Silicon + initialized `../` SDK dev env | `.tar.gz` |
 | `linux-amd64` | Docker; produces Ubuntu/Linux x86_64 package | `.tar.gz` |
 | `linux-arm64` | Docker; produces Ubuntu/Linux ARM64 package | `.tar.gz` |
 | `windows-amd64` | Windows + MSYS2 + initialized Windows SDK dev env | `.zip` |
@@ -37,34 +37,34 @@ Common commands:
 
 ### macOS Apple Silicon
 
-Native macOS builds reuse the `gowireshark` SDK dev environment. Do not vendor Wireshark source into this repo.
+Native macOS builds reuse the `epan` SDK dev environment. Do not vendor Wireshark source into this repo.
 
 ```bash
-cd ../gowireshark
+cd ../epan
 ./init_mac_dev.sh
 source ./dev_env.sh
 
-cd ../gowireshark-cli
+cd ../epan
 ./build.sh --version 0.1.0 --target darwin-arm64
 ```
 
-`gowireshark-cli/go.mod` should keep the released SDK dependency only. The macOS build script injects a temporary local SDK `replace` through an internal modfile and does not mutate `go.mod`.
+`epan/go.mod` should keep the released SDK dependency only. The macOS build script injects a temporary local SDK `replace` through an internal modfile and does not mutate `go.mod`.
 
 For local development across both repos, use a workspace outside the repo instead of committing `replace`:
 
 ```bash
 cd /Users/randolph/go
-go work init ./gowireshark ./gowireshark-cli
+go work init ./gowireshark ./epan
 # if go.work already exists:
-go work use ./gowireshark ./gowireshark-cli
+go work use ./gowireshark ./epan
 ```
 
 Validate the package:
 
 ```bash
-tar -xzf dist/gowireshark-cli-darwin-arm64.tar.gz -C /tmp
-/tmp/gowireshark-cli-darwin-arm64/bin/gowireshark-env version
-/tmp/gowireshark-cli-darwin-arm64/bin/gowireshark-env frames count --file /path/to/capture.pcap
+tar -xzf dist/epan-darwin-arm64.tar.gz -C /tmp
+/tmp/epan-darwin-arm64/bin/epan-env version
+/tmp/epan-darwin-arm64/bin/epan-env frames count --file /path/to/capture.pcap
 ```
 
 ### Ubuntu / Linux
@@ -99,11 +99,11 @@ If a regional mirror fails, pass an explicit mirror:
 Use on the target Ubuntu/Linux host:
 
 ```bash
-tar -xzf gowireshark-cli-linux-amd64.tar.gz
-cd gowireshark-cli-linux-amd64
-./bin/gowireshark-env version
-./bin/gowireshark-env frames count --file /path/to/capture.pcap
-./bin/gowireshark-mcp-env
+tar -xzf epan-linux-amd64.tar.gz
+cd epan-linux-amd64
+./bin/epan-env version
+./bin/epan-env frames count --file /path/to/capture.pcap
+./bin/epan-mcp-env
 ```
 
 ### Windows x86_64
@@ -129,7 +129,7 @@ cd C:\msys64\usr\bin
 **步骤2：初始化 SDK 开发环境**
 
 ```powershell
-cd <gowireshark-sdk-path>
+cd <epan-sdk-path>
 .\init_win_dev.ps1
 ```
 
@@ -146,12 +146,12 @@ cd <gowireshark-sdk-path>
 打开 **MSYS2 MinGW x64** 终端：
 
 ```bash
-# 进入 gowireshark SDK 目录并加载环境变量
-cd <gowireshark-sdk-path>
+# 进入 epan SDK 目录并加载环境变量
+cd <epan-sdk-path>
 source ./dev_env.sh
 
 # 切换到 CLI 项目目录
-cd <gowireshark-cli-path>
+cd <epan-path>
 
 # 执行构建（指定版本号和目标平台）
 ./build.sh --version 0.1.0 --target windows-amd64
@@ -163,16 +163,16 @@ cd <gowireshark-cli-path>
 
 ```bash
 # 在 MSYS2 bash 中
-cd <gowireshark-cli-path>/dist/gowireshark-cli-windows-amd64
-./bin/gowireshark.exe version
-./bin/gowireshark.exe frames count --file <gowireshark-sdk-path>/pcaps/test.pcap
+cd <epan-path>/dist/epan-windows-amd64
+./bin/epan.exe version
+./bin/epan.exe frames count --file <epan-sdk-path>/pcaps/test.pcap
 ```
 
 **MCP 模式验证**（脱离 MSYS2，模拟 Trae 实际调用环境）：
 
 ```cmd
 :: 打开 Windows cmd 或 PowerShell，直接使用 wrapper 脚本
-<gowireshark-cli-path>\dist\gowireshark-cli-windows-amd64\bin\gowireshark-env.cmd version
+<epan-path>\dist\epan-windows-amd64\bin\epan-env.cmd version
 ```
 
 > 如果输出 `{"version": "4.6.6"}`，说明 CLI 依赖库完整。
@@ -198,13 +198,13 @@ cd <gowireshark-cli-path>/dist/gowireshark-cli-windows-amd64
    - 示例：
      ```bash
      cd <parent-directory>
-     go work init ./gowireshark ./gowireshark-cli
+     go work init ./gowireshark ./epan
      ```
 
 5. **运行时环境**：
    - 编译好的 CLI 需要 `libwireshark.dll` 和相关依赖
-   - 使用 `gowireshark-env.cmd` 或 `gowireshark-env` 脚本启动，它们会自动设置环境变量
-   - 不要直接运行 `gowireshark.exe`，否则会缺少依赖
+   - 使用 `epan-env.cmd` 或 `epan-env` 脚本启动，它们会自动设置环境变量
+   - 不要直接运行 `epan.exe`，否则会缺少依赖
 
 **在 Trae/Codex/Claude Code 中使用**：
 
@@ -214,7 +214,7 @@ cd <gowireshark-cli-path>/dist/gowireshark-cli-windows-amd64
 
 ```bash
 # 在 Trae 中配置工具路径
-/path/to/gowireshark-cli-windows-amd64/bin/gowireshark-env frames count --file /path/to/capture.pcap
+/path/to/epan-windows-amd64/bin/epan-env frames count --file /path/to/capture.pcap
 ```
 
 **方式2：MCP 模式**
@@ -224,38 +224,38 @@ cd <gowireshark-cli-path>/dist/gowireshark-cli-windows-amd64
 ```json
 {
   "mcpServers": {
-    "gowireshark": {
-      "command": "<dist-path>\\gowireshark-cli-windows-amd64\\bin\\gowireshark-mcp-env.cmd",
+    "epan": {
+      "command": "<dist-path>\\epan-windows-amd64\\bin\\epan-mcp-env.cmd",
       "args": [],
       "env": {
-        "GOWIRESHARK_PCAP_DIR": "<dist-path>\\gowireshark-cli-windows-amd64\\pcaps",
-        "GOWIRESHARK_OUTPUT_DIR": "<dist-path>\\gowireshark-cli-windows-amd64\\output"
+        "PCAP_DIR": "<dist-path>\\epan-windows-amd64\\pcaps",
+        "OUTPUT_DIR": "<dist-path>\\epan-windows-amd64\\output"
       }
     }
   }
 }
 ```
 
-> **重要**：Windows 必须使用 `.cmd` 后缀的文件（`gowireshark-mcp-env.cmd`）。
+> **重要**：Windows 必须使用 `.cmd` 后缀的文件（`epan-mcp-env.cmd`）。
 > 该 wrapper 会自动设置 `PATH`（包含 `lib/` 目录和 `C:\Windows\System32`）、
 > `WIRESHARK_LIB_DIR`、`WIRESHARK_DATA_DIR` 等环境变量，无需在 `env` 字段中额外设置。
 > 如果 MCP 客户端以空环境启动进程（仅传递 `env` 中的变量），wrapper 仍然能正常工作，
 > 因为它内置了系统路径兜底。
 
-MCP 模式启动后，通过 Trae 调用 `gowireshark_get_version` 应返回 `{"version": "4.6.6"}`。
+MCP 模式启动后，通过 Trae 调用 `epan_get_version` 应返回 `{"version": "4.6.6"}`。
 
 > MCP tool name 从 1.0 起采用面向 Agent 的动词命名，旧名已删除。常用入口：
-> `gowireshark_health_check`、`gowireshark_count_frames`、`gowireshark_list_streams`、
-> `gowireshark_validate_filter`、`gowireshark_verify_zeek_alert`、
-> `gowireshark_create_evidence_bundle`。升级后需要重启 MCP 客户端以刷新 schema。
+> `epan_health_check`、`epan_count_frames`、`epan_list_streams`、
+> `epan_validate_filter`、`epan_verify_zeek_alert`、
+> `epan_create_evidence_bundle`。升级后需要重启 MCP 客户端以刷新 schema。
 > 可设置 `MCP_CALL_LOG_PATH=/path/to/mcp-calls.jsonl` 记录 JSONL 调用日志。
 
 **方式3：直接在目标主机使用**
 
 ```cmd
-powershell -Command "Expand-Archive dist\gowireshark-cli-windows-amd64.zip -DestinationPath C:\tools"
-C:\tools\gowireshark-cli-windows-amd64\bin\gowireshark-env.cmd version
-C:\tools\gowireshark-cli-windows-amd64\bin\gowireshark-mcp-env.cmd
+powershell -Command "Expand-Archive dist\epan-windows-amd64.zip -DestinationPath C:\tools"
+C:\tools\epan-windows-amd64\bin\epan-env.cmd version
+C:\tools\epan-windows-amd64\bin\epan-mcp-env.cmd
 ```
 
 **故障排除**：
@@ -265,7 +265,7 @@ C:\tools\gowireshark-cli-windows-amd64\bin\gowireshark-mcp-env.cmd
 | `zip not found` | 重新运行 `init_win_dev.ps1`，或在 MSYS2 中运行 `pacman -S zip` |
 | `WIRESHARK_LIB_DIR not set` | 在 MSYS2 bash 中运行 `source ./dev_env.sh` |
 | `DLL load failed / exit code -1073741515` | `libwireshark.dll` 的传递依赖（glib/gio/gmodule 等）缺失。确保使用最新 `build.sh` 重新构建（新版本会自动从 MSYS2 `ucrt64/bin` 复制全部所需 DLL） |
-| `command failed: ` (MCP 调用无详细信息) | MCP 服务器启动成功但执行 CLI 命令失败，通常原因同上（DLL 缺失）。在 cmd 中运行 `<dist>\bin\gowireshark-env.cmd version` 验证 |
+| `command failed: ` (MCP 调用无详细信息) | MCP 服务器启动成功但执行 CLI 命令失败，通常原因同上（DLL 缺失）。在 cmd 中运行 `<dist>\bin\epan-env.cmd version` 验证 |
 | `Permission denied` | 确保所有文件有正确的执行权限 |
 
 **自动化脚本**（可选）：
@@ -274,9 +274,9 @@ C:\tools\gowireshark-cli-windows-amd64\bin\gowireshark-mcp-env.cmd
 
 ```bash
 #!/usr/bin/env bash
-cd <gowireshark-sdk-path>
+cd <epan-sdk-path>
 source ./dev_env.sh
-cd <gowireshark-cli-path>
+cd <epan-path>
 ./build.sh --version 0.1.0 --target windows-amd64
 echo "Build completed. Output in dist/"
 ```
@@ -286,12 +286,12 @@ echo "Build completed. Output in dist/"
 ## Package Layout
 
 ```text
-gowireshark-cli-<target>/
+epan-<target>/
   bin/
-    gowireshark[.exe]
-    gowireshark-mcp[.exe]
-    gowireshark-env[.cmd]
-    gowireshark-mcp-env[.cmd]
+    epan[.exe]
+    epan-mcp[.exe]
+    epan-env[.cmd]
+    epan-mcp-env[.cmd]
   lib/
   share/wireshark/
   .trae/
@@ -311,9 +311,9 @@ gowireshark-cli-<target>/
   PACKAGE_INFO
 ```
 
-Always use wrapper scripts on target machines. They set `DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH`, `WIRESHARK_LIB_DIR`, `WIRESHARK_DATA_DIR`, `WIRESHARK_CONF_DIR`, `GOWIRESHARK_BIN`, `GOWIRESHARK_PCAP_DIR`, and `GOWIRESHARK_OUTPUT_DIR`.
+Always use wrapper scripts on target machines. They set `DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH`, `WIRESHARK_LIB_DIR`, `WIRESHARK_DATA_DIR`, `WIRESHARK_CONF_DIR`, `BIN`, `PCAP_DIR`, and `OUTPUT_DIR`.
 
-Do not call raw `bin/gowireshark` directly on a relocated machine unless the same dynamic library paths already exist. Use `bin/gowireshark-env` / `bin/gowireshark-env.cmd`.
+Do not call raw `bin/epan` directly on a relocated machine unless the same dynamic library paths already exist. Use `bin/epan-env` / `bin/epan-env.cmd`.
 
 ## Trae / Agent Usage
 
@@ -322,8 +322,8 @@ Do not call raw `bin/gowireshark` directly on a relocated machine unless the sam
 Point Trae at the wrapper in the extracted package, or put it on `PATH`:
 
 ```bash
-/path/to/gowireshark-cli-<target>/bin/gowireshark-env frames count --file /path/to/capture.pcap
-/path/to/gowireshark-cli-<target>/bin/gowireshark-env frames page --file /path/to/capture.pcap --page 1 --size 10
+/path/to/epan-<target>/bin/epan-env frames count --file /path/to/capture.pcap
+/path/to/epan-<target>/bin/epan-env frames page --file /path/to/capture.pcap --page 1 --size 10
 ```
 
 For stable use, copy `.trae/rules/project_rules.md` into each project where Trae should use the tool.
@@ -335,12 +335,12 @@ Copy `.trae/mcp.json.template` to `.trae/mcp.json` and point it at the extracted
 ```json
 {
   "mcpServers": {
-    "gowireshark": {
-      "command": "/path/to/gowireshark-cli-<target>/bin/gowireshark-mcp-env",
+    "epan": {
+      "command": "/path/to/epan-<target>/bin/epan-mcp-env",
       "args": [],
       "env": {
-        "GOWIRESHARK_PCAP_DIR": "/path/to/pcaps",
-        "GOWIRESHARK_OUTPUT_DIR": "/tmp/gowireshark-output"
+        "PCAP_DIR": "/path/to/pcaps",
+        "OUTPUT_DIR": "/tmp/epan-output"
       }
     }
   }
@@ -354,14 +354,14 @@ Do not commit real local `.trae/mcp.json` files.
 Codex should use project-level instructions and the package wrappers:
 
 ```bash
-cp /path/to/gowireshark-cli-<target>/.codex/AGENTS.md ./AGENTS.md
-/path/to/gowireshark-cli-<target>/bin/gowireshark-env frames count --file /path/to/capture.pcap
+cp /path/to/epan-<target>/.codex/AGENTS.md ./AGENTS.md
+/path/to/epan-<target>/bin/epan-env frames count --file /path/to/capture.pcap
 ```
 
 If your Codex runtime supports MCP config, use `.codex/config.toml.template` as a local template and point it to:
 
 ```bash
-/path/to/gowireshark-cli-<target>/bin/gowireshark-mcp-env
+/path/to/epan-<target>/bin/epan-mcp-env
 ```
 
 Do not commit personal Codex MCP config unless the paths are intentionally portable for the team.
@@ -371,8 +371,8 @@ Do not commit personal Codex MCP config unless the paths are intentionally porta
 Claude Code can use the shipped `CLAUDE.md` and project-scoped MCP template:
 
 ```bash
-cp /path/to/gowireshark-cli-<target>/CLAUDE.md ./CLAUDE.md
-cp /path/to/gowireshark-cli-<target>/.mcp.json.template ./.mcp.json
+cp /path/to/epan-<target>/CLAUDE.md ./CLAUDE.md
+cp /path/to/epan-<target>/.mcp.json.template ./.mcp.json
 # edit absolute paths in .mcp.json
 ```
 
@@ -383,7 +383,7 @@ The `.claude/settings.json.template` file is optional. Copy it only when the tar
 Use `agents/mcp.json.template` or `.mcp.json.template`, replacing absolute paths:
 
 ```bash
-/path/to/gowireshark-cli-<target>/bin/gowireshark-mcp-env
+/path/to/epan-<target>/bin/epan-mcp-env
 ```
 
 Use `agents/pcap-analysis-rules.md` as the common tool-use policy for any agent.
@@ -393,12 +393,12 @@ For Windows, use the `.cmd` wrapper in the same template (note the `.cmd` extens
 ```json
 {
   "mcpServers": {
-    "gowireshark": {
-      "command": "C:\\tools\\gowireshark-cli-windows-amd64\\bin\\gowireshark-mcp-env.cmd",
+    "epan": {
+      "command": "C:\\tools\\epan-windows-amd64\\bin\\epan-mcp-env.cmd",
       "args": [],
       "env": {
-        "GOWIRESHARK_PCAP_DIR": "C:\\tools\\gowireshark-cli-windows-amd64\\pcaps",
-        "GOWIRESHARK_OUTPUT_DIR": "C:\\tools\\gowireshark-cli-windows-amd64\\output"
+        "PCAP_DIR": "C:\\tools\\epan-windows-amd64\\pcaps",
+        "OUTPUT_DIR": "C:\\tools\\epan-windows-amd64\\output"
       }
     }
   }
@@ -425,79 +425,79 @@ The following flags are planned for future SDK support and are not yet available
 ### System
 
 ```bash
-gowireshark version
+epan version
 ```
 
-When using a packaged release, replace `gowireshark` with the wrapper:
+When using a packaged release, replace `epan` with the wrapper:
 
 ```bash
-./bin/gowireshark-env version
+./bin/epan-env version
 ```
 
 ### Filter
 
 ```bash
-gowireshark filter validate --expr 'tcp.port == 80'
-gowireshark filter validate-detailed --expr 'tcp.stream'
-gowireshark filter suggest --prefix 'tcp.'
+epan filter validate --expr 'tcp.port == 80'
+epan filter validate-detailed --expr 'tcp.stream'
+epan filter suggest --prefix 'tcp.'
 ```
 
 ### Metadata
 
 ```bash
-gowireshark metadata protocols
-gowireshark metadata fields
-gowireshark metadata field --name tcp.stream
+epan metadata protocols
+epan metadata fields
+epan metadata field --name tcp.stream
 ```
 
 ### Frames
 
 ```bash
-gowireshark frames count --file capture.pcap --filter 'tcp'
-gowireshark frames page --file capture.pcap --page 1 --size 20 --filter 'http'
-gowireshark frames get --file capture.pcap --index 5
-gowireshark frames batch --file capture.pcap --indices 1,5,10
-gowireshark frames hex --file capture.pcap --index 5
-gowireshark frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
-gowireshark frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
+epan frames count --file capture.pcap --filter 'tcp'
+epan frames page --file capture.pcap --page 1 --size 20 --filter 'http'
+epan frames get --file capture.pcap --index 5
+epan frames batch --file capture.pcap --indices 1,5,10
+epan frames hex --file capture.pcap --index 5
+epan frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
+epan frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
 ```
 
 ### Streams and Traffic
 
 ```bash
-gowireshark streams list --file capture.pcap --filter 'tcp'
-gowireshark traffic conversations list --file capture.pcap --filter 'dns'
-gowireshark traffic timeline summary --file capture.pcap
-gowireshark traffic files list --file capture.pcap
+epan streams list --file capture.pcap --filter 'tcp'
+epan traffic conversations list --file capture.pcap --filter 'dns'
+epan traffic timeline summary --file capture.pcap
+epan traffic files list --file capture.pcap
 ```
 
 ### Expert, Follow, and Evidence
 
 ```bash
-gowireshark expert list --file capture.pcap --filter 'tcp'
-gowireshark follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
-gowireshark follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
-gowireshark slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
-gowireshark slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
-gowireshark evidence bundle --file capture.pcap --filter 'tcp.port == 80'
+epan expert list --file capture.pcap --filter 'tcp'
+epan follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
+epan follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
+epan slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
+epan slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
+epan evidence bundle --file capture.pcap --filter 'tcp.port == 80'
 ```
 
 ### Tap, SRT, and Export Objects
 
 ```bash
-gowireshark tap conversations --file capture.pcap --type tcp --filter 'tcp'
-gowireshark tap endpoints --file capture.pcap --type ip
-gowireshark srt list --file capture.pcap --protocol smb
-gowireshark srt list --file capture.pcap --protocol dns
-gowireshark export-object list --file capture.pcap --protocol http
-gowireshark export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
+epan tap conversations --file capture.pcap --type tcp --filter 'tcp'
+epan tap endpoints --file capture.pcap --type ip
+epan srt list --file capture.pcap --protocol smb
+epan srt list --file capture.pcap --protocol dns
+epan export-object list --file capture.pcap --protocol http
+epan export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
 ```
 
 ### Stats and Extraction
 
 ```bash
-gowireshark stats --file capture.pcap --filter 'tcp'
-gowireshark extract --file capture.pcap --out extracted-files/
+epan stats --file capture.pcap --filter 'tcp'
+epan extract --file capture.pcap --out extracted-files/
 ```
 
 ## Final Validation Checklist
@@ -509,8 +509,8 @@ bash -n build.sh
 go test ./...
 docker build --check -f Dockerfile .
 ! grep -q '^replace github.com/randolphcyg/gowireshark' go.mod
-./dist/gowireshark-cli-<target>/bin/gowireshark-env version
-./dist/gowireshark-cli-<target>/bin/gowireshark-env frames count --file /path/to/capture.pcap
+./dist/epan-<target>/bin/epan-env version
+./dist/epan-<target>/bin/epan-env frames count --file /path/to/capture.pcap
 ```
 
 For Linux archives, run the last two commands on the same OS/architecture family as the target agent host.

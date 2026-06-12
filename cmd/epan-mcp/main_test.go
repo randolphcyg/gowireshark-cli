@@ -53,11 +53,11 @@ func TestValidateTapType(t *testing.T) {
 }
 
 func TestValidatePCAPPath(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_PCAP_DIR")
-	defer os.Setenv("GOWIRESHARK_PCAP_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_PCAP_DIR")
+	defer os.Setenv("EPAN_PCAP_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_PCAP_DIR", tmpDir)
+	os.Setenv("EPAN_PCAP_DIR", tmpDir)
 
 	if err := os.WriteFile(filepath.Join(tmpDir, "test.pcap"), []byte("dummy"), 0644); err != nil {
 		t.Fatalf("create test pcap: %v", err)
@@ -81,18 +81,18 @@ func TestValidatePCAPPath(t *testing.T) {
 		})
 	}
 
-	os.Unsetenv("GOWIRESHARK_PCAP_DIR")
+	os.Unsetenv("EPAN_PCAP_DIR")
 	if err := validatePCAPPath(filepath.Join(tmpDir, "test.pcap")); err != nil {
-		t.Errorf("validatePCAPPath with no GOWIRESHARK_PCAP_DIR should allow any path: %v", err)
+		t.Errorf("validatePCAPPath with no PCAP_DIR should allow any path: %v", err)
 	}
 }
 
 func TestResolvePCAPPathRelativeAndTraversal(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_PCAP_DIR")
-	defer os.Setenv("GOWIRESHARK_PCAP_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_PCAP_DIR")
+	defer os.Setenv("EPAN_PCAP_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_PCAP_DIR", tmpDir)
+	os.Setenv("EPAN_PCAP_DIR", tmpDir)
 
 	got, err := resolvePCAPPath("test.pcap")
 	if err != nil {
@@ -116,11 +116,11 @@ func TestResolvePCAPPathRelativeAndTraversal(t *testing.T) {
 }
 
 func TestValidateOutputPath(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_OUTPUT_DIR")
-	defer os.Setenv("GOWIRESHARK_OUTPUT_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_OUTPUT_DIR")
+	defer os.Setenv("EPAN_OUTPUT_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_OUTPUT_DIR", tmpDir)
+	os.Setenv("EPAN_OUTPUT_DIR", tmpDir)
 
 	tests := []struct {
 		name    string
@@ -142,11 +142,11 @@ func TestValidateOutputPath(t *testing.T) {
 }
 
 func TestResolveOutputPathRelativeAndSymlinkEscape(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_OUTPUT_DIR")
-	defer os.Setenv("GOWIRESHARK_OUTPUT_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_OUTPUT_DIR")
+	defer os.Setenv("EPAN_OUTPUT_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_OUTPUT_DIR", tmpDir)
+	os.Setenv("EPAN_OUTPUT_DIR", tmpDir)
 
 	got, err := resolveOutputPath("evidence.pcap")
 	if err != nil {
@@ -175,35 +175,36 @@ func TestResolveOutputPathRelativeAndSymlinkEscape(t *testing.T) {
 
 func TestToolRegistration(t *testing.T) {
 	toolNames := []string{
-		"gowireshark_get_version",
-		"gowireshark_validate_filter",
-		"gowireshark_suggest_filter",
-		"gowireshark_list_protocols",
-		"gowireshark_list_fields",
-		"gowireshark_get_field_info",
-		"gowireshark_count_frames",
-		"gowireshark_list_frames",
-		"gowireshark_get_frame",
-		"gowireshark_get_frames_batch",
-		"gowireshark_get_frame_hex",
-		"gowireshark_get_frame_fields",
-		"gowireshark_list_streams",
-		"gowireshark_list_conversations",
-		"gowireshark_get_timeline_summary",
-		"gowireshark_list_files",
-		"gowireshark_list_expert_findings",
-		"gowireshark_follow_stream",
-		"gowireshark_create_pcap_slice",
-		"gowireshark_create_evidence_bundle",
-		"gowireshark_verify_zeek_alert",
-		"gowireshark_list_tap_conversations",
-		"gowireshark_list_tap_endpoints",
-		"gowireshark_list_service_response_times",
-		"gowireshark_list_exportable_objects",
-		"gowireshark_write_exported_object",
-		"gowireshark_get_stats_summary",
-		"gowireshark_extract_files",
-		"gowireshark_health_check",
+		"get_version",
+		"validate_filter",
+		"validate_filter_detailed",
+		"suggest_filter",
+		"list_protocols",
+		"list_fields",
+		"get_field_info",
+		"count_frames",
+		"list_frames",
+		"get_frame",
+		"get_frames_batch",
+		"get_frame_hex",
+		"get_frame_fields",
+		"list_streams",
+		"list_conversations",
+		"timeline_summary",
+		"list_files",
+		"list_expert_findings",
+		"follow_stream",
+		"create_pcap_slice",
+		"create_evidence_bundle",
+		"verify_zeek_alert",
+		"tap_conversations",
+		"tap_endpoints",
+		"service_response_times",
+		"exportable_objects",
+		"write_exportable_object",
+		"stats_summary",
+		"extract_files",
+		"health_check",
 	}
 
 	seen := make(map[string]bool)
@@ -212,18 +213,15 @@ func TestToolRegistration(t *testing.T) {
 			t.Errorf("duplicate tool name: %s", name)
 		}
 		seen[name] = true
-		if !strings.HasPrefix(name, "gowireshark_") {
-			t.Errorf("tool %s should have gowireshark_ prefix", name)
-		}
 	}
 
 	expectedNewTools := []string{
-		"gowireshark_list_protocols",
-		"gowireshark_list_fields",
-		"gowireshark_get_stats_summary",
-		"gowireshark_extract_files",
-		"gowireshark_health_check",
-		"gowireshark_verify_zeek_alert",
+		"list_protocols",
+		"list_fields",
+		"stats_summary",
+		"extract_files",
+		"health_check",
+		"verify_zeek_alert",
 	}
 	for _, name := range expectedNewTools {
 		if !seen[name] {
@@ -253,12 +251,12 @@ func TestTruncationMetadata(t *testing.T) {
 	text := "test output"
 	text = text + "\n\n[output truncated: 1024/2048 bytes, max=1024]"
 
-	out := &gowiresharkOutput{
+	out := &epanOutput{
 		Text:              text,
 		Truncated:         true,
 		MaxOutputBytes:    1024,
 		OriginalBytes:     2048,
-		SuggestedNextTool: "gowireshark_create_pcap_slice",
+		SuggestedNextTool: "create_pcap_slice",
 	}
 
 	result := buildResult(out.Text, out)
@@ -278,8 +276,8 @@ func TestTruncationMetadata(t *testing.T) {
 	if result.Meta["originalBytes"] != int64(2048) {
 		t.Errorf("Meta.originalBytes = %v, want 2048", result.Meta["originalBytes"])
 	}
-	if result.Meta["suggestedNextTool"] != "gowireshark_create_pcap_slice" {
-		t.Errorf("Meta.suggestedNextTool = %v, want gowireshark_create_pcap_slice", result.Meta["suggestedNextTool"])
+	if result.Meta["suggestedNextTool"] != "create_pcap_slice" {
+		t.Errorf("Meta.suggestedNextTool = %v, want create_pcap_slice", result.Meta["suggestedNextTool"])
 	}
 
 	if !strings.Contains(out.Text, "truncated") {
@@ -288,7 +286,7 @@ func TestTruncationMetadata(t *testing.T) {
 }
 
 func TestNonTruncatedOutputNoMeta(t *testing.T) {
-	out := &gowiresharkOutput{
+	out := &epanOutput{
 		Text:           "test output",
 		Truncated:      false,
 		MaxOutputBytes: 1024,
@@ -302,7 +300,7 @@ func TestNonTruncatedOutputNoMeta(t *testing.T) {
 }
 
 func TestParseOutputNonTruncated(t *testing.T) {
-	out := &gowiresharkOutput{
+	out := &epanOutput{
 		Raw:       []byte(`{"count":3}`),
 		Truncated: false,
 	}
@@ -314,13 +312,13 @@ func TestParseOutputNonTruncated(t *testing.T) {
 
 func TestInputValidation(t *testing.T) {
 	tmpDir := t.TempDir()
-	originalDir := os.Getenv("GOWIRESHARK_OUTPUT_DIR")
-	os.Setenv("GOWIRESHARK_OUTPUT_DIR", tmpDir)
-	defer os.Setenv("GOWIRESHARK_OUTPUT_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_OUTPUT_DIR")
+	os.Setenv("EPAN_OUTPUT_DIR", tmpDir)
+	defer os.Setenv("EPAN_OUTPUT_DIR", originalDir)
 
-	originalPcapDir := os.Getenv("GOWIRESHARK_PCAP_DIR")
-	os.Setenv("GOWIRESHARK_PCAP_DIR", tmpDir)
-	defer os.Setenv("GOWIRESHARK_PCAP_DIR", originalPcapDir)
+	originalPcapDir := os.Getenv("EPAN_PCAP_DIR")
+	os.Setenv("EPAN_PCAP_DIR", tmpDir)
+	defer os.Setenv("EPAN_PCAP_DIR", originalPcapDir)
 
 	tests := []struct {
 		name    string
@@ -399,36 +397,36 @@ func TestPromptNames(t *testing.T) {
 
 func TestResourceURIs(t *testing.T) {
 	resources := []string{
-		"gowireshark://pcaps",
-		"gowireshark://outputs",
-		"gowireshark://docs/cli-reference",
+		"epan://pcaps",
+		"epan://outputs",
+		"epan://docs/cli-reference",
 	}
 	for _, uri := range resources {
 		if uri == "" {
 			t.Error("resource URI should not be empty")
 		}
-		if !strings.HasPrefix(uri, "gowireshark://") {
-			t.Errorf("resource URI %s should have gowireshark:// prefix", uri)
+		if !strings.HasPrefix(uri, "epan://") {
+			t.Errorf("resource URI %s should have epan:// prefix", uri)
 		}
 	}
 }
 
 func TestResourceTemplateURI(t *testing.T) {
-	template := "gowireshark://pcap/{name}/summary"
+	template := "epan://pcap/{name}/summary"
 	if !strings.Contains(template, "{name}") {
 		t.Error("resource template should contain {name} variable")
 	}
-	if !strings.HasPrefix(template, "gowireshark://") {
-		t.Error("resource template should have gowireshark:// prefix")
+	if !strings.HasPrefix(template, "epan://") {
+		t.Error("resource template should have epan:// prefix")
 	}
 }
 
 func TestResourcePCAPsReturnToolReadyPaths(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_PCAP_DIR")
-	defer os.Setenv("GOWIRESHARK_PCAP_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_PCAP_DIR")
+	defer os.Setenv("EPAN_PCAP_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_PCAP_DIR", tmpDir)
+	os.Setenv("EPAN_PCAP_DIR", tmpDir)
 	if err := os.WriteFile(filepath.Join(tmpDir, "sample.pcap"), []byte("pcap"), 0644); err != nil {
 		t.Fatalf("write sample pcap: %v", err)
 	}
@@ -436,7 +434,7 @@ func TestResourcePCAPsReturnToolReadyPaths(t *testing.T) {
 	cs, closeFn := startMCPTestSession(t)
 	defer closeFn()
 
-	res, err := cs.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "gowireshark://pcaps"})
+	res, err := cs.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "epan://pcaps"})
 	if err != nil {
 		t.Fatalf("ReadResource(pcaps): %v", err)
 	}
@@ -453,11 +451,11 @@ func TestResourcePCAPsReturnToolReadyPaths(t *testing.T) {
 }
 
 func TestResourceOutputsReturnToolReadyPaths(t *testing.T) {
-	originalDir := os.Getenv("GOWIRESHARK_OUTPUT_DIR")
-	defer os.Setenv("GOWIRESHARK_OUTPUT_DIR", originalDir)
+	originalDir := os.Getenv("EPAN_OUTPUT_DIR")
+	defer os.Setenv("EPAN_OUTPUT_DIR", originalDir)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_OUTPUT_DIR", tmpDir)
+	os.Setenv("EPAN_OUTPUT_DIR", tmpDir)
 	if err := os.WriteFile(filepath.Join(tmpDir, "evidence.pcap"), []byte("pcap"), 0644); err != nil {
 		t.Fatalf("write output file: %v", err)
 	}
@@ -465,7 +463,7 @@ func TestResourceOutputsReturnToolReadyPaths(t *testing.T) {
 	cs, closeFn := startMCPTestSession(t)
 	defer closeFn()
 
-	res, err := cs.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "gowireshark://outputs"})
+	res, err := cs.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "epan://outputs"})
 	if err != nil {
 		t.Fatalf("ReadResource(outputs): %v", err)
 	}
@@ -482,17 +480,17 @@ func TestResourceOutputsReturnToolReadyPaths(t *testing.T) {
 }
 
 func TestPCAPSummaryResourceUsesRuntime(t *testing.T) {
-	originalPcapDir := os.Getenv("GOWIRESHARK_PCAP_DIR")
-	originalBin := os.Getenv("GOWIRESHARK_BIN")
-	defer os.Setenv("GOWIRESHARK_PCAP_DIR", originalPcapDir)
-	defer os.Setenv("GOWIRESHARK_BIN", originalBin)
+	originalPcapDir := os.Getenv("EPAN_PCAP_DIR")
+	originalBin := os.Getenv("EPAN_BIN")
+	defer os.Setenv("EPAN_PCAP_DIR", originalPcapDir)
+	defer os.Setenv("EPAN_BIN", originalBin)
 
 	tmpDir := t.TempDir()
-	os.Setenv("GOWIRESHARK_PCAP_DIR", tmpDir)
+	os.Setenv("EPAN_PCAP_DIR", tmpDir)
 	if err := os.WriteFile(filepath.Join(tmpDir, "sample.pcap"), []byte("pcap"), 0644); err != nil {
 		t.Fatalf("write sample pcap: %v", err)
 	}
-	fakeBin := filepath.Join(tmpDir, "fake-gowireshark")
+	fakeBin := filepath.Join(tmpDir, "fake-epan")
 	script := `#!/bin/sh
 case "$1 $2" in
   "frames count") echo '{"count":7}' ;;
@@ -504,9 +502,9 @@ esac
 	if err := os.WriteFile(fakeBin, []byte(script), 0755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
 	}
-	os.Setenv("GOWIRESHARK_BIN", fakeBin)
+	os.Setenv("EPAN_BIN", fakeBin)
 
-	res, err := pcapSummaryResource(context.Background(), "gowireshark://pcap/sample.pcap/summary")
+	res, err := pcapSummaryResource(context.Background(), "epan://pcap/sample.pcap/summary")
 	if err != nil {
 		t.Fatalf("pcapSummaryResource: %v", err)
 	}
@@ -536,53 +534,53 @@ func TestToolSchemasAdvertiseConstraints(t *testing.T) {
 		tools[tool.Name] = tool
 	}
 	for _, name := range []string{
-		"gowireshark_count_frames",
-		"gowireshark_list_frames",
-		"gowireshark_get_frame",
-		"gowireshark_health_check",
-		"gowireshark_verify_zeek_alert",
+		"count_frames",
+		"list_frames",
+		"get_frame",
+		"health_check",
+		"verify_zeek_alert",
 	} {
 		if tools[name] == nil {
 			t.Fatalf("expected renamed tool %s to be listed", name)
 		}
 	}
 	for _, old := range []string{
-		"gowireshark_frames_count",
-		"gowireshark_frames_page",
-		"gowireshark_frames_get",
-		"gowireshark_doctor",
-		"gowireshark_expert_list",
+		"frames_count",
+		"frames_page",
+		"frames_get",
+		"doctor",
+		"expert_list",
 	} {
 		if tools[old] != nil {
 			t.Fatalf("old tool %s should not be listed", old)
 		}
 	}
 
-	framesPage := schemaMap(t, tools["gowireshark_list_frames"].InputSchema)
+	framesPage := schemaMap(t, tools["list_frames"].InputSchema)
 	requireContains(t, framesPage["required"], "file")
 	page := propertySchema(t, framesPage, "page")
 	if page["minimum"].(float64) != 1 {
 		t.Fatalf("frames_page page minimum = %v, want 1", page["minimum"])
 	}
 
-	follow := schemaMap(t, tools["gowireshark_follow_stream"].InputSchema)
+	follow := schemaMap(t, tools["follow_stream"].InputSchema)
 	protocol := propertySchema(t, follow, "protocol")
 	requireContains(t, protocol["enum"], "tcp")
 	requireContains(t, protocol["enum"], "udp")
 
-	tap := schemaMap(t, tools["gowireshark_list_tap_endpoints"].InputSchema)
+	tap := schemaMap(t, tools["tap_endpoints"].InputSchema)
 	tapType := propertySchema(t, tap, "type")
 	requireContains(t, tapType["enum"], "eth")
 	requireContains(t, tapType["enum"], "udp")
 
-	exportWrite := schemaMap(t, tools["gowireshark_write_exported_object"].InputSchema)
+	exportWrite := schemaMap(t, tools["write_exportable_object"].InputSchema)
 	requireContains(t, exportWrite["required"], "packetNum")
 	packetNum := propertySchema(t, exportWrite, "packetNum")
 	if packetNum["minimum"].(float64) != 1 {
 		t.Fatalf("packetNum minimum = %v, want 1", packetNum["minimum"])
 	}
 
-	verify := schemaMap(t, tools["gowireshark_verify_zeek_alert"].InputSchema)
+	verify := schemaMap(t, tools["verify_zeek_alert"].InputSchema)
 	requireContains(t, verify["required"], "file")
 }
 
@@ -592,7 +590,7 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	os.Setenv("MCP_CALL_LOG_PATH", logPath)
 	defer os.Setenv("MCP_CALL_LOG_PATH", originalLog)
 
-	handler := tracedTool("gowireshark_count_frames", func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, map[string]any, error) {
+	handler := tracedTool("count_frames", func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, map[string]any, error) {
 		return nil, nil, os.ErrNotExist
 	})
 	result, _, err := handler(context.Background(), &mcp.CallToolRequest{}, emptyIn{})
@@ -615,7 +613,7 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read call log: %v", err)
 	}
-	if !strings.Contains(string(data), `"tool_name":"gowireshark_count_frames"`) {
+	if !strings.Contains(string(data), `"tool_name":"count_frames"`) {
 		t.Fatalf("call log missing tool name: %s", data)
 	}
 }
@@ -629,15 +627,15 @@ func TestCountFramesDoesNotAdvertiseOutputSchema(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	for _, tool := range res.Tools {
-		if tool.Name == "gowireshark_count_frames" && tool.OutputSchema != nil {
-			t.Fatalf("gowireshark_count_frames output schema = %#v, want nil so clients accept CLI JSON structuredContent", tool.OutputSchema)
+		if tool.Name == "count_frames" && tool.OutputSchema != nil {
+			t.Fatalf("count_frames output schema = %#v, want nil so clients accept CLI JSON structuredContent", tool.OutputSchema)
 		}
 	}
 }
 
 func TestDoctorOutputFields(t *testing.T) {
 	result := map[string]any{
-		"binary":                    "gowireshark",
+		"binary":                    "epan",
 		"resolvedBinaryPath":        "",
 		"pcapDir":                   pcapDir(),
 		"outputDir":                 outputDir(),
@@ -646,17 +644,17 @@ func TestDoctorOutputFields(t *testing.T) {
 		"wiresharkLibDir":           os.Getenv("WIRESHARK_LIB_DIR"),
 		"wiresharkDataDir":          os.Getenv("WIRESHARK_DATA_DIR"),
 		"wiresharkConfDir":          os.Getenv("WIRESHARK_CONF_DIR"),
-		"gowiresharkPcapDir":        os.Getenv("GOWIRESHARK_PCAP_DIR"),
-		"gowiresharkOutputDir":      os.Getenv("GOWIRESHARK_OUTPUT_DIR"),
-		"gowiresharkTimeout":        os.Getenv("GOWIRESHARK_TIMEOUT"),
-		"gowiresharkMaxOutputBytes": os.Getenv("GOWIRESHARK_MAX_OUTPUT_BYTES"),
+		"epanPcapDir":        os.Getenv("EPAN_PCAP_DIR"),
+		"epanOutputDir":      os.Getenv("EPAN_OUTPUT_DIR"),
+		"epanTimeout":        os.Getenv("EPAN_TIMEOUT"),
+		"epanMaxOutputBytes": os.Getenv("EPAN_MAX_OUTPUT_BYTES"),
 	}
 
 	expectedFields := []string{
 		"binary", "resolvedBinaryPath", "pcapDir", "outputDir", "timeout",
 		"maxOutputBytes", "wiresharkLibDir", "wiresharkDataDir",
-		"wiresharkConfDir", "gowiresharkPcapDir", "gowiresharkOutputDir",
-		"gowiresharkTimeout", "gowiresharkMaxOutputBytes",
+		"wiresharkConfDir", "epanPcapDir", "epanOutputDir",
+		"epanTimeout", "epanMaxOutputBytes",
 	}
 	for _, field := range expectedFields {
 		if _, ok := result[field]; !ok {
@@ -667,22 +665,22 @@ func TestDoctorOutputFields(t *testing.T) {
 
 func TestCliReferenceContent(t *testing.T) {
 	ref := cliReferenceMarkdown()
-	if !strings.Contains(ref, "gowireshark version") {
+	if !strings.Contains(ref, "epan version") {
 		t.Error("CLI reference should contain version command")
 	}
-	if !strings.Contains(ref, "gowireshark stats") {
+	if !strings.Contains(ref, "epan stats") {
 		t.Error("CLI reference should contain stats command")
 	}
-	if !strings.Contains(ref, "gowireshark extract") {
+	if !strings.Contains(ref, "epan extract") {
 		t.Error("CLI reference should contain extract command")
 	}
 }
 
 func TestTimeoutDefault(t *testing.T) {
-	original := os.Getenv("GOWIRESHARK_TIMEOUT")
-	defer os.Setenv("GOWIRESHARK_TIMEOUT", original)
+	original := os.Getenv("EPAN_TIMEOUT")
+	defer os.Setenv("EPAN_TIMEOUT", original)
 
-	os.Unsetenv("GOWIRESHARK_TIMEOUT")
+	os.Unsetenv("EPAN_TIMEOUT")
 	d := timeout()
 	if d != 120*1e9 {
 		t.Errorf("default timeout = %v, want 120s", d)
@@ -690,17 +688,17 @@ func TestTimeoutDefault(t *testing.T) {
 }
 
 func TestMaxOutputBytesDefault(t *testing.T) {
-	original := os.Getenv("GOWIRESHARK_MAX_OUTPUT_BYTES")
-	defer os.Setenv("GOWIRESHARK_MAX_OUTPUT_BYTES", original)
+	original := os.Getenv("EPAN_MAX_OUTPUT_BYTES")
+	defer os.Setenv("EPAN_MAX_OUTPUT_BYTES", original)
 
-	os.Unsetenv("GOWIRESHARK_MAX_OUTPUT_BYTES")
+	os.Unsetenv("EPAN_MAX_OUTPUT_BYTES")
 	n := maxOutputBytes()
-	if n != 8*1024*1024 {
-		t.Errorf("default maxOutputBytes = %d, want %d", n, 8*1024*1024)
+	if n != 2*1024*1024 {
+		t.Errorf("default maxOutputBytes = %d, want %d", n, 2*1024*1024)
 	}
 
 	for _, value := range []string{"0", "-1"} {
-		os.Setenv("GOWIRESHARK_MAX_OUTPUT_BYTES", value)
+		os.Setenv("EPAN_MAX_OUTPUT_BYTES", value)
 		if got := maxOutputBytes(); got != defaultMaxOutputBytes {
 			t.Errorf("maxOutputBytes(%q) = %d, want %d", value, got, defaultMaxOutputBytes)
 		}

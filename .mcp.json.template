@@ -1,14 +1,36 @@
 {
   "mcpServers": {
-    "gowireshark": {
-      "type": "stdio",
-      "command": "/ABSOLUTE/PATH/TO/gowireshark-cli-<target>/bin/gowireshark-mcp-env",
+    "_comment": "=== epan MCP Server Configuration ===",
+    "_comment_env": "Environment variables: EPAN_PCAP_DIR, EPAN_OUTPUT_DIR, EPAN_TIMEOUT, EPAN_MAX_OUTPUT_BYTES",
+    "_comment_env2": "MCP debug/logging vars: MCP_CALL_LOG_PATH (JSONL audit log), MCP_TRACE_ID",
+
+    "epan-stdio": {
+      "_comment": "--- stdio 模式（默认）：本地安全通信，无需认证 ---",
+      "command": "/ABSOLUTE/PATH/TO/epan-<target>/bin/epan-mcp-env",
       "args": [],
       "env": {
-        "GOWIRESHARK_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
-        "GOWIRESHARK_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/gowireshark-output",
-        "GOWIRESHARK_TIMEOUT": "120s",
-        "GOWIRESHARK_MAX_OUTPUT_BYTES": "8388608"
+        "EPAN_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
+        "EPAN_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/epan-output",
+        "EPAN_TIMEOUT": "120s",
+        "EPAN_MAX_OUTPUT_BYTES": "8388608"
+      }
+    },
+
+    "epan-http": {
+      "_comment": "--- HTTP 模式：远程/跨进程访问，需 Bearer Token 认证 ---",
+      "command": "/ABSOLUTE/PATH/TO/epan-<target>/bin/epan-mcp-env",
+      "args": [
+        "--transport=http",
+        "--listen=127.0.0.1:8002",
+        "--endpoint=/mcp",
+        "--token=请替换为安全的随机令牌"
+      ],
+      "env": {
+        "EPAN_PCAP_DIR": "/ABSOLUTE/PATH/TO/pcaps",
+        "EPAN_OUTPUT_DIR": "/ABSOLUTE/PATH/TO/epan-output",
+        "EPAN_TIMEOUT": "120s",
+        "EPAN_MAX_OUTPUT_BYTES": "8388608",
+        "MCP_CALL_LOG_PATH": "/ABSOLUTE/PATH/TO/epan-mcp-audit.jsonl"
       }
     }
   }

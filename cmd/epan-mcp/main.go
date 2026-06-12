@@ -3,188 +3,321 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const defaultMaxOutputBytes int64 = 8 * 1024 * 1024
+const (
+	defaultMaxOutputBytes = 2 * 1024 * 1024
+	defaultTimeout        = 120 * time.Second
+	maxFilterLength       = 4096
+	maxExprLength         = 4096
+	maxPathLength         = 1024
+	rateLimitWindow       = time.Second
+	maxRequestsPerWindow  = 30
+)
 
 func main() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(0)
 
+	transport := flag.String("transport", "stdio", "MCP transport: stdio or http")
+	listen := flag.String("listen", ":8002", "HTTP listen address when --transport=http")
+	endpoint := flag.String("endpoint", "/mcp", "HTTP MCP endpoint path when --transport=http")
+	token := flag.String("token", "", "Optional bearer token for HTTP authentication")
+	flag.Parse()
+
 	srv := newMCPServer()
-	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	var err error
+	switch *transport {
+	case "stdio":
+		err = srv.Run(context.Background(), &mcp.StdioTransport{})
+	case "http", "streamable_http":
+		err = runHTTPServer(srv, *listen, *endpoint, *token)
+	default:
+		err = fmt.Errorf("unsupported transport %q; expected stdio or http", *transport)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
+// rateLimiter is a sliding window rate limiter
+type rateLimiter struct {
+	mu          sync.Mutex
+	window      time.Duration
+	maxRequests int
+	requests    []time.Time
+}
+
+func newRateLimiter(window time.Duration, maxRequests int) *rateLimiter {
+	return &rateLimiter{
+		window:      window,
+		maxRequests: maxRequests,
+		requests:    make([]time.Time, 0, maxRequests),
+	}
+}
+
+func (rl *rateLimiter) allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+	i := 0
+	for ; i < len(rl.requests) && rl.requests[i].Before(cutoff); i++ {
+	}
+	rl.requests = rl.requests[i:]
+	if len(rl.requests) < rl.maxRequests {
+		rl.requests = append(rl.requests, now)
+		return true
+	}
+	return false
+}
+
+var globalRateLimiter = newRateLimiter(rateLimitWindow, maxRequestsPerWindow)
+
+func runHTTPServer(srv *mcp.Server, addr, endpoint, token string) error {
+	if endpoint == "" {
+		endpoint = "/mcp"
+	}
+	innerHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+		return srv
+	}, nil)
+
+	mux := http.NewServeMux()
+	// Health check does not require auth or rate limiting
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","service":"epan"}`))
+	})
+
+	// Wrapped MCP endpoint with auth and rate limiting
+	mux.Handle(endpoint, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bearer token authentication (if configured)
+		if token != "" {
+			authHeader := r.Header.Get("Authorization")
+			if !strings.HasPrefix(authHeader, "Bearer ") {
+				http.Error(w, `{"error": "unauthorized: missing or invalid Authorization header"}`, http.StatusUnauthorized)
+				log.Printf("request rejected: missing auth token")
+				return
+			}
+			providedToken := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			if providedToken != token {
+				http.Error(w, `{"error": "unauthorized: invalid token"}`, http.StatusUnauthorized)
+				log.Printf("request rejected: invalid auth token")
+				return
+			}
+		}
+
+		// Rate limiting
+		if !globalRateLimiter.allow() {
+			http.Error(w, `{"error": "too many requests"}`, http.StatusTooManyRequests)
+			log.Printf("request rejected: rate limit exceeded")
+			return
+		}
+
+		innerHandler.ServeHTTP(w, r)
+	}))
+
+	log.Printf("epan MCP HTTP endpoint listening on %s%s", addr, endpoint)
+	if token != "" {
+		log.Printf("authentication enabled (bearer token required)")
+	}
+	return http.ListenAndServe(addr, mux)
+}
+
 func newMCPServer() *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "gowireshark", Version: "1.0.0"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "epan", Version: "1.0.0"}, nil)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_version",
-		Description: "Get gowireshark runtime version information",
+		Name:        "get_version",
+		Description: "Get runtime version information",
 	}, handleVersion)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_validate_filter",
-		Description: "Validate a display filter with detailed field-level feedback including field types and valid operators",
+		Name:        "validate_filter",
+		Description: "Validate a display filter expression (returns true/false)",
+		InputSchema: toolInputSchema("validate_filter"),
+	}, handleFilterValidate)
+
+	addTool(srv, &mcp.Tool{
+		Name:        "validate_filter_detailed",
+		Description: "Validate a display filter with detailed field-level feedback",
+		InputSchema: toolInputSchema("validate_filter_detailed"),
 	}, handleFilterValidateDetailed)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_suggest_filter",
-		Description: "Suggest Wireshark display filter field names by prefix (e.g. 'tcp.' or 'ip.')",
+		Name:        "suggest_filter",
+		Description: "Suggest display filter field names by prefix (e.g. 'tcp.' or 'ip.')",
+		InputSchema: toolInputSchema("suggest_filter"),
 	}, handleFilterSuggest)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_protocols",
-		Description: "List all protocols supported by the Wireshark runtime",
+		Name:        "list_protocols",
+		Description: "List all supported protocols",
 	}, handleMetadataProtocols)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_fields",
-		Description: "List all display filter fields supported by the Wireshark runtime",
+		Name:        "list_fields",
+		Description: "List all display filter fields",
 	}, handleMetadataFields)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_field_info",
-		Description: "Get detailed metadata for a specific display filter field (type, description, valid operators)",
+		Name:        "get_field_info",
+		Description: "Get metadata for a display filter field",
+		InputSchema: toolInputSchema("get_field_info"),
 	}, handleMetadataField)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_count_frames",
-		Description: "Count frames in a PCAP file, optionally filtered by a display filter expression",
+		Name:        "count_frames",
+		Description: "Count frames in a PCAP file",
+		InputSchema: toolInputSchema("count_frames"),
 	}, handleFramesCount)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_frames",
-		Description: "Get a paginated list of frames from a PCAP file. Use page>=1 and size>=1 for pagination.",
-		InputSchema: toolInputSchema("gowireshark_list_frames"),
+		Name:        "list_frames",
+		Description: "Get paginated frames from a PCAP file",
+		InputSchema: toolInputSchema("list_frames"),
 	}, handleFramesPage)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_frame",
-		Description: "Get a single frame by its frame number (1-based index)",
-		InputSchema: toolInputSchema("gowireshark_get_frame"),
+		Name:        "get_frame",
+		Description: "Get a single frame by frame number",
+		InputSchema: toolInputSchema("get_frame"),
 	}, handleFramesGet)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_frames_batch",
-		Description: "Get multiple frames by their frame numbers (comma-separated indices, e.g. '1,5,10')",
+		Name:        "get_frames_batch",
+		Description: "Get frames by comma-separated frame numbers (e.g. '1,5,10')",
+		InputSchema: toolInputSchema("get_frames_batch"),
 	}, handleFramesBatch)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_frame_hex",
-		Description: "Get hex dump (raw bytes) for a specific frame by its frame number",
+		Name:        "get_frame_hex",
+		Description: "Get hex dump for a frame",
+		InputSchema: toolInputSchema("get_frame_hex"),
 	}, handleFramesHex)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_frame_fields",
-		Description: "Export selected display filter fields from frames as JSONL. Use Wireshark field names like 'ip.src','ip.dst','tcp.port'.",
+		Name:        "get_frame_fields",
+		Description: "Export display filter fields from frames as JSON",
+		InputSchema: toolInputSchema("get_frame_fields"),
 	}, handleFramesFields)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_streams",
-		Description: "List TCP and UDP streams in a PCAP file with stream IDs for follow operations",
+		Name:        "list_streams",
+		Description: "List TCP/UDP streams with stream IDs",
+		InputSchema: toolInputSchema("list_streams"),
 	}, handleStreamsList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_conversations",
-		Description: "List network conversations (address pair exchanges) from a PCAP file",
+		Name:        "list_conversations",
+		Description: "List network conversations from a PCAP file",
+		InputSchema: toolInputSchema("list_conversations"),
 	}, handleConversationsList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_timeline_summary",
-		Description: "Get traffic timeline summary (packet activity over time) from a PCAP file",
+		Name:        "timeline_summary",
+		Description: "Get traffic timeline from a PCAP file",
+		InputSchema: toolInputSchema("timeline_summary"),
 	}, handleTimelineSummary)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_files",
-		Description: "List file objects detected in network traffic (e.g. HTTP downloads, SMB transfers)",
+		Name:        "list_files",
+		Description: "List files detected in network traffic",
+		InputSchema: toolInputSchema("list_files"),
 	}, handleFilesList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_expert_findings",
-		Description: "Get expert analysis entries (anomalies, warnings, protocol violations) from a PCAP file",
+		Name:        "list_expert_findings",
+		Description: "Get expert analysis findings (anomalies, warnings, violations)",
+		InputSchema: toolInputSchema("list_expert_findings"),
 	}, handleExpertList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_follow_stream",
-		Description: "Follow and reconstruct a TCP or UDP stream. Use protocol=tcp|udp with a stream filter like 'tcp.stream eq 0'.",
-		InputSchema: toolInputSchema("gowireshark_follow_stream"),
+		Name:        "follow_stream",
+		Description: "Follow and reconstruct a TCP/UDP stream",
+		InputSchema: toolInputSchema("follow_stream"),
 	}, handleFollowStream)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_create_pcap_slice",
-		Description: "Slice a PCAP file by display filter or frame indices into a new PCAP file. Output is written to GOWIRESHARK_OUTPUT_DIR.",
-		InputSchema: toolInputSchema("gowireshark_create_pcap_slice"),
+		Name:        "create_pcap_slice",
+		Description: "Slice a PCAP file. Output goes to OUTPUT_DIR.",
+		InputSchema: toolInputSchema("create_pcap_slice"),
 	}, handleSlicePcap)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_create_evidence_bundle",
-		Description: "Build a comprehensive forensic evidence bundle including conversations, expert infos, and protocol hierarchy",
+		Name:        "create_evidence_bundle",
+		Description: "Build a forensic evidence bundle (conversations, expert infos, protocol hierarchy)",
+		InputSchema: toolInputSchema("create_evidence_bundle"),
 	}, handleEvidenceBundle)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_verify_zeek_alert",
-		Description: "Verify a Zeek alert against packet evidence. Provide file plus either filter or Zeek alert fields; returns validation, candidate frames, streams, and expert findings.",
-		InputSchema: toolInputSchema("gowireshark_verify_zeek_alert"),
+		Name:        "verify_zeek_alert",
+		Description: "Verify a Zeek alert against packet evidence",
+		InputSchema: toolInputSchema("verify_zeek_alert"),
 	}, handleVerifyZeekAlert)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_tap_conversations",
-		Description: "Get conversation statistics via tap interface. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("gowireshark_list_tap_conversations"),
+		Name:        "tap_conversations",
+		Description: "Get conversation stats. Type: eth|ip|tcp|udp.",
+		InputSchema: toolInputSchema("tap_conversations"),
 	}, handleTapConversations)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_tap_endpoints",
-		Description: "Get endpoint statistics via tap interface. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("gowireshark_list_tap_endpoints"),
+		Name:        "tap_endpoints",
+		Description: "Get endpoint stats. Type: eth|ip|tcp|udp.",
+		InputSchema: toolInputSchema("tap_endpoints"),
 	}, handleTapEndpoints)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_service_response_times",
-		Description: "Get service response time statistics for a protocol (e.g. smb, dns, http)",
+		Name:        "service_response_times",
+		Description: "Get service response times for a protocol",
+		InputSchema: toolInputSchema("service_response_times"),
 	}, handleSRTList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_list_exportable_objects",
-		Description: "List exportable objects for a protocol (e.g. http objects like files, images)",
+		Name:        "exportable_objects",
+		Description: "List exportable objects for a protocol",
+		InputSchema: toolInputSchema("exportable_objects"),
 	}, handleExportObjectList)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_write_exported_object",
-		Description: "Write an export object to a file. Output is restricted to GOWIRESHARK_OUTPUT_DIR.",
-		InputSchema: toolInputSchema("gowireshark_write_exported_object"),
+		Name:        "write_exportable_object",
+		Description: "Write an export object to a file",
+		InputSchema: toolInputSchema("write_exportable_object"),
 	}, handleExportObjectWrite)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_get_stats_summary",
-		Description: "Get a comprehensive statistical summary of a PCAP file including protocol distribution, packet sizes, and timing",
-		InputSchema: toolInputSchema("gowireshark_get_stats_summary"),
+		Name:        "stats_summary",
+		Description: "Get statistical summary of a PCAP file",
+		InputSchema: toolInputSchema("stats_summary"),
 	}, handleStatsSummary)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_extract_files",
-		Description: "Extract files and objects detected in network traffic to a local directory. Output is restricted to GOWIRESHARK_OUTPUT_DIR.",
-		InputSchema: toolInputSchema("gowireshark_extract_files"),
+		Name:        "extract_files",
+		Description: "Extract files from network traffic to a directory",
+		InputSchema: toolInputSchema("extract_files"),
 	}, handleExtractFiles)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "gowireshark_health_check",
-		Description: "Diagnose the gowireshark runtime environment: version, binary path, directories, environment variables",
+		Name:        "health_check",
+		Description: "Check runtime environment health",
 	}, handleDoctor)
 
 	registerResources(srv)
@@ -201,7 +334,7 @@ func addTool[In any](srv *mcp.Server, tool *mcp.Tool, handler mcp.ToolHandlerFor
 // does not set StructuredContent on the wire. Clients that cannot handle
 // structuredContent without an advertised outputSchema (e.g. Trae) will see
 // only the text content. Error envelopes still set StructuredContent explicitly.
-func successResult(out *gowiresharkOutput) (*mcp.CallToolResult, map[string]any, error) {
+func successResult(out *epanOutput) (*mcp.CallToolResult, map[string]any, error) {
 	return buildResult(out.Text, out), nil, nil
 }
 
@@ -230,6 +363,7 @@ func tracedTool[In any](toolName string, handler mcp.ToolHandlerFor[In, map[stri
 				result.Meta["trace_id"] = traceID
 			}
 			writeToolCallLog(toolName, traceID, in, status, errorCode, result, time.Since(start))
+			auditLog(toolName, time.Since(start), status == "semantic_failure" || status == "exception")
 		}()
 
 		result, structured, err = handler(ctx, req, in)
@@ -256,49 +390,71 @@ func tracedTool[In any](toolName string, handler mcp.ToolHandlerFor[In, map[stri
 }
 
 func toolInputSchema(name string) map[string]any {
-	file := map[string]any{"type": "string", "minLength": 1, "description": "PCAP path. Relative paths resolve under GOWIRESHARK_PCAP_DIR when set."}
+	file := map[string]any{"type": "string", "minLength": 1, "description": "PCAP path. Relative paths resolve under PCAP_DIR when set."}
 	filter := map[string]any{"type": "string", "description": "Wireshark display filter expression."}
-	out := map[string]any{"type": "string", "minLength": 1, "description": "Output path. Relative paths resolve under GOWIRESHARK_OUTPUT_DIR."}
+	out := map[string]any{"type": "string", "minLength": 1, "description": "Output path. Relative paths resolve under OUTPUT_DIR."}
 
 	switch name {
-	case "gowireshark_list_frames":
+	case "validate_filter":
+		return objectSchema([]string{"expr"}, map[string]any{
+			"expr": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter expression to validate."},
+		})
+	case "validate_filter_detailed":
+		return objectSchema([]string{"expr"}, map[string]any{
+			"expr": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter expression to validate with detailed feedback."},
+		})
+	case "suggest_filter":
+		return objectSchema([]string{"prefix"}, map[string]any{
+			"prefix": map[string]any{"type": "string", "minLength": 1, "description": "Field name prefix to search, e.g. 'tcp.', 'ip.'."},
+			"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+		})
+	case "get_field_info":
+		return objectSchema([]string{"name"}, map[string]any{
+			"name": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter field name, e.g. 'tcp.stream'."},
+		})
+	case "count_frames":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "list_frames":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"filter": filter,
 			"page":   map[string]any{"type": "integer", "minimum": 1, "default": 1},
 			"size":   map[string]any{"type": "integer", "minimum": 1, "default": 20},
 		})
-	case "gowireshark_get_frame":
+	case "get_frame":
 		return objectSchema([]string{"file", "index"}, map[string]any{
 			"file":  file,
 			"index": map[string]any{"type": "integer", "minimum": 1},
 		})
-	case "gowireshark_follow_stream":
+	case "follow_stream":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":     file,
 			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
 			"filter":   filter,
 		})
-	case "gowireshark_create_pcap_slice":
+	case "create_pcap_slice":
 		return objectSchema([]string{"file", "out"}, map[string]any{
 			"file":    file,
 			"out":     out,
 			"filter":  filter,
 			"indices": map[string]any{"type": "string", "description": "Comma-separated frame numbers."},
 		})
-	case "gowireshark_list_tap_conversations":
+	case "tap_conversations":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "tcp"},
 			"filter": filter,
 		})
-	case "gowireshark_list_tap_endpoints":
+	case "tap_endpoints":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "ip"},
 			"filter": filter,
 		})
-	case "gowireshark_write_exported_object":
+	case "write_exportable_object":
 		return objectSchema([]string{"file", "protocol", "packetNum", "out"}, map[string]any{
 			"file":      file,
 			"protocol":  map[string]any{"type": "string", "minLength": 1},
@@ -306,17 +462,23 @@ func toolInputSchema(name string) map[string]any {
 			"out":       out,
 			"filter":    filter,
 		})
-	case "gowireshark_get_stats_summary":
+	case "get_frame_fields":
+		return objectSchema([]string{"file", "fields"}, map[string]any{
+			"file":   file,
+			"fields": map[string]any{"type": "string", "minLength": 1, "description": "Comma-separated Wireshark field names, e.g. 'ip.src,ip.dst,tcp.port'."},
+			"filter": filter,
+		})
+	case "stats_summary":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"filter": filter,
 		})
-	case "gowireshark_extract_files":
+	case "extract_files":
 		return objectSchema([]string{"file", "out"}, map[string]any{
 			"file": file,
 			"out":  out,
 		})
-	case "gowireshark_verify_zeek_alert":
+	case "verify_zeek_alert":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":     file,
 			"filter":   filter,
@@ -326,6 +488,59 @@ func toolInputSchema(name string) map[string]any {
 			"src_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 			"dst_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}},
+		})
+	case "get_frames_batch":
+		return objectSchema([]string{"file", "indices"}, map[string]any{
+			"file":    file,
+			"indices": map[string]any{"type": "string", "minLength": 1, "description": "Comma-separated frame numbers, e.g. '1,5,10'."},
+			"filter":  filter,
+		})
+	case "get_frame_hex":
+		return objectSchema([]string{"file", "index"}, map[string]any{
+			"file":  file,
+			"index": map[string]any{"type": "integer", "minimum": 1},
+		})
+	case "list_streams":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "list_conversations":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "timeline_summary":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "list_files":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "list_expert_findings":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "create_evidence_bundle":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "exportable_objects":
+		return objectSchema([]string{"file", "protocol"}, map[string]any{
+			"file":     file,
+			"protocol": map[string]any{"type": "string", "minLength": 1, "description": "Protocol name, e.g. 'http'."},
+			"filter":   filter,
+		})
+	case "service_response_times":
+		return objectSchema([]string{"file", "protocol"}, map[string]any{
+			"file":     file,
+			"protocol": map[string]any{"type": "string", "minLength": 1, "description": "Protocol name, e.g. 'smb', 'dns', 'http'."},
+			"filter":   filter,
 		})
 	default:
 		return objectSchema(nil, map[string]any{})
@@ -344,28 +559,47 @@ func objectSchema(required []string, properties map[string]any) map[string]any {
 	return schema
 }
 
+// --- Audit logging ---
+
+func auditLog(tool string, duration time.Duration, failed bool) {
+	status := "ok"
+	if failed {
+		status = "error"
+	}
+	log.Printf("audit tool=%s duration=%v status=%s", tool, duration.Round(time.Millisecond), status)
+}
+
+// --- Input validation helpers ---
+
+func validateStringMax(s, label string, maxLen int) error {
+	if len(s) > maxLen {
+		return fmt.Errorf("%s too long (%d bytes, max %d)", label, len(s), maxLen)
+	}
+	return nil
+}
+
 // --- Environment helpers ---
 
-func gowiresharkBin() string {
-	if v := os.Getenv("GOWIRESHARK_BIN"); v != "" {
+func epanBin() string {
+	if v := os.Getenv("EPAN_BIN"); v != "" {
 		return v
 	}
-	return "gowireshark"
+	return "epan"
 }
 
 func pcapDir() string {
-	return os.Getenv("GOWIRESHARK_PCAP_DIR")
+	return os.Getenv("EPAN_PCAP_DIR")
 }
 
 func outputDir() string {
-	if v := os.Getenv("GOWIRESHARK_OUTPUT_DIR"); v != "" {
+	if v := os.Getenv("EPAN_OUTPUT_DIR"); v != "" {
 		return v
 	}
 	return os.TempDir()
 }
 
 func timeout() time.Duration {
-	if v := os.Getenv("GOWIRESHARK_TIMEOUT"); v != "" {
+	if v := os.Getenv("EPAN_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
@@ -374,7 +608,7 @@ func timeout() time.Duration {
 }
 
 func maxOutputBytes() int64 {
-	if v := os.Getenv("GOWIRESHARK_MAX_OUTPUT_BYTES"); v != "" {
+	if v := os.Getenv("EPAN_MAX_OUTPUT_BYTES"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}
@@ -521,7 +755,7 @@ func validateTapType(tapType string, allowed ...string) error {
 
 // --- Output truncation ---
 
-type gowiresharkOutput struct {
+type epanOutput struct {
 	Text              string
 	Raw               []byte
 	Truncated         bool
@@ -548,11 +782,13 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func runGowireshark(ctx context.Context, args ...string) (*gowiresharkOutput, error) {
+func runEpan(ctx context.Context, args ...string) (*epanOutput, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout())
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, gowiresharkBin(), args...)
+	cmd := exec.CommandContext(cmdCtx, epanBin(), args...)
+	// subprocess isolation: create new process group so cleanup on timeout kills the whole tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout := &limitedBuffer{limit: maxOutputBytes()}
 	stderr := &limitedBuffer{limit: 64 * 1024}
 	cmd.Stdout = stdout
@@ -566,7 +802,7 @@ func runGowireshark(ctx context.Context, args ...string) (*gowiresharkOutput, er
 		return nil, fmt.Errorf("command failed: %w", err)
 	}
 
-	out := &gowiresharkOutput{
+	out := &epanOutput{
 		Raw:            stdout.buf,
 		MaxOutputBytes: stdout.limit,
 		OriginalBytes:  stdout.total,
@@ -589,13 +825,13 @@ func runGowireshark(ctx context.Context, args ...string) (*gowiresharkOutput, er
 	return out, nil
 }
 
-func (o *gowiresharkOutput) suggestTool(tool string) {
+func (o *epanOutput) suggestTool(tool string) {
 	o.SuggestedNextTool = tool
 }
 
 // --- Result builders ---
 
-func buildResult(text string, out *gowiresharkOutput) *mcp.CallToolResult {
+func buildResult(text string, out *epanOutput) *mcp.CallToolResult {
 	result := &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
 	}
@@ -618,7 +854,7 @@ func newTraceID() string {
 	if v := os.Getenv("MCP_TRACE_ID"); v != "" {
 		return v
 	}
-	return fmt.Sprintf("gw-%d-%d", time.Now().UnixNano(), os.Getpid())
+	return fmt.Sprintf("ep-%d-%d", time.Now().UnixNano(), os.Getpid())
 }
 
 func errorEnvelope(toolName, traceID, code, message string, retryable bool) map[string]any {
@@ -675,18 +911,18 @@ func retryableError(err error) bool {
 func suggestionForError(code, message string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "Use the gowireshark://pcaps resource to get an allowed path, or pass a relative PCAP name under GOWIRESHARK_PCAP_DIR."
+		return "Use the epan://pcaps resource to get an allowed path, or pass a relative PCAP name under PCAP_DIR."
 	case "MISSING_REQUIRED_PARAM":
 		return "Check the tool input schema and provide the required parameter before retrying."
 	case "INVALID_ARGUMENT":
 		return "Use schema enum values and numeric minimums exactly as advertised by list tools."
 	case "TIMEOUT":
-		return "Retry with a narrower display filter or increase GOWIRESHARK_TIMEOUT for large captures."
+		return "Retry with a narrower display filter or increase TIMEOUT for large captures."
 	case "CLI_ERROR":
 		if strings.Contains(strings.ToLower(message), "filter") {
-			return "Call gowireshark_validate_filter or gowireshark_suggest_filter before reusing this display filter."
+			return "Call validate_filter or suggest_filter before reusing this display filter."
 		}
-		return "Call gowireshark_health_check to verify the runtime, then retry with a narrower query."
+		return "Call health_check to verify the runtime, then retry with a narrower query."
 	default:
 		return "Inspect error_message and retry with corrected parameters."
 	}
@@ -695,12 +931,12 @@ func suggestionForError(code, message string) string {
 func nextToolForError(code, message string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "gowireshark_health_check"
+		return "health_check"
 	case "CLI_ERROR":
 		if strings.Contains(strings.ToLower(message), "filter") {
-			return "gowireshark_validate_filter"
+			return "validate_filter"
 		}
-		return "gowireshark_health_check"
+		return "health_check"
 	default:
 		return ""
 	}
@@ -761,7 +997,7 @@ func fileFilterCLI(args []string, file string, filter *string) []string {
 	return out
 }
 
-func parseOutput(out *gowiresharkOutput) map[string]any {
+func parseOutput(out *epanOutput) map[string]any {
 	if out == nil || out.Truncated {
 		return nil
 	}
@@ -928,7 +1164,7 @@ type doctorIn struct{}
 // --- Handlers ---
 
 func handleVersion(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runGowireshark(ctx, "version")
+	out, err := runEpan(ctx, "version")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -939,7 +1175,10 @@ func handleFilterValidate(ctx context.Context, _ *mcp.CallToolRequest, in filter
 	if in.Expr == "" {
 		return nil, nil, fmt.Errorf("expr is required")
 	}
-	out, err := runGowireshark(ctx, "filter", "validate", "--expr", in.Expr)
+	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
+		return nil, nil, err
+	}
+	out, err := runEpan(ctx, "filter", "validate", "--expr", in.Expr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -950,7 +1189,10 @@ func handleFilterValidateDetailed(ctx context.Context, _ *mcp.CallToolRequest, i
 	if in.Expr == "" {
 		return nil, nil, fmt.Errorf("expr is required")
 	}
-	out, err := runGowireshark(ctx, "filter", "validate-detailed", "--expr", in.Expr)
+	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
+		return nil, nil, err
+	}
+	out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", in.Expr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -961,11 +1203,14 @@ func handleFilterSuggest(ctx context.Context, _ *mcp.CallToolRequest, in filterS
 	if in.Prefix == "" {
 		return nil, nil, fmt.Errorf("prefix is required")
 	}
+	if err := validateStringMax(in.Prefix, "prefix", 128); err != nil {
+		return nil, nil, err
+	}
 	limit := 50
 	if in.Limit > 0 {
 		limit = in.Limit
 	}
-	out, err := runGowireshark(ctx, "filter", "suggest", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
+	out, err := runEpan(ctx, "filter", "suggest", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -973,7 +1218,7 @@ func handleFilterSuggest(ctx context.Context, _ *mcp.CallToolRequest, in filterS
 }
 
 func handleMetadataProtocols(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runGowireshark(ctx, "metadata", "protocols")
+	out, err := runEpan(ctx, "metadata", "protocols")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -981,11 +1226,11 @@ func handleMetadataProtocols(ctx context.Context, _ *mcp.CallToolRequest, _ empt
 }
 
 func handleMetadataFields(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runGowireshark(ctx, "metadata", "fields")
+	out, err := runEpan(ctx, "metadata", "fields")
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_suggest_filter")
+	out.suggestTool("suggest_filter")
 	return successResult(out)
 }
 
@@ -993,7 +1238,10 @@ func handleMetadataField(ctx context.Context, _ *mcp.CallToolRequest, in metadat
 	if in.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
 	}
-	out, err := runGowireshark(ctx, "metadata", "field", "--name", in.Name)
+	if err := validateStringMax(in.Name, "name", 128); err != nil {
+		return nil, nil, err
+	}
+	out, err := runEpan(ctx, "metadata", "field", "--name", in.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1001,15 +1249,23 @@ func handleMetadataField(ctx context.Context, _ *mcp.CallToolRequest, in metadat
 }
 
 func handleFramesCount(ctx context.Context, _ *mcp.CallToolRequest, in framesCountIn) (*mcp.CallToolResult, map[string]any, error) {
+	if err := validateStringMax(in.File, "file", maxPathLength); err != nil {
+		return nil, nil, err
+	}
+	if in.Filter != nil && *in.Filter != "" {
+		if err := validateStringMax(*in.Filter, "filter", maxFilterLength); err != nil {
+			return nil, nil, err
+		}
+	}
 	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"frames", "count"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"frames", "count"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_list_streams")
+	out.suggestTool("list_streams")
 	return successResult(out)
 }
 
@@ -1030,7 +1286,7 @@ func handleFramesPage(ctx context.Context, _ *mcp.CallToolRequest, in framesPage
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1045,7 +1301,7 @@ func handleFramesGet(ctx context.Context, _ *mcp.CallToolRequest, in framesGetIn
 	if in.Index < 1 {
 		return nil, nil, fmt.Errorf("index must be >= 1, got %d", in.Index)
 	}
-	out, err := runGowireshark(ctx, "frames", "get", "--file", file, "--index", strconv.Itoa(in.Index))
+	out, err := runEpan(ctx, "frames", "get", "--file", file, "--index", strconv.Itoa(in.Index))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1064,7 +1320,7 @@ func handleFramesBatch(ctx context.Context, _ *mcp.CallToolRequest, in framesBat
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1079,7 +1335,7 @@ func handleFramesHex(ctx context.Context, _ *mcp.CallToolRequest, in framesHexIn
 	if in.Index < 1 {
 		return nil, nil, fmt.Errorf("index must be >= 1, got %d", in.Index)
 	}
-	out, err := runGowireshark(ctx, "frames", "hex", "--file", file, "--index", strconv.Itoa(in.Index))
+	out, err := runEpan(ctx, "frames", "hex", "--file", file, "--index", strconv.Itoa(in.Index))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1098,7 +1354,7 @@ func handleFramesFields(ctx context.Context, _ *mcp.CallToolRequest, in framesFi
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1110,7 +1366,7 @@ func handleStreamsList(ctx context.Context, _ *mcp.CallToolRequest, in streamsLi
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"streams", "list"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"streams", "list"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1122,7 +1378,7 @@ func handleConversationsList(ctx context.Context, _ *mcp.CallToolRequest, in con
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"traffic", "conversations", "list"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "conversations", "list"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1134,7 +1390,7 @@ func handleTimelineSummary(ctx context.Context, _ *mcp.CallToolRequest, in timel
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"traffic", "timeline", "summary"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "timeline", "summary"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1146,7 +1402,7 @@ func handleFilesList(ctx context.Context, _ *mcp.CallToolRequest, in filesListIn
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"traffic", "files", "list"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "files", "list"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1158,7 +1414,7 @@ func handleExpertList(ctx context.Context, _ *mcp.CallToolRequest, in expertList
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"expert", "list"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"expert", "list"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1181,7 +1437,7 @@ func handleFollowStream(ctx context.Context, _ *mcp.CallToolRequest, in followSt
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1207,7 +1463,7 @@ func handleSlicePcap(ctx context.Context, _ *mcp.CallToolRequest, in slicePcapIn
 	if in.Indices != nil && *in.Indices != "" {
 		args = append(args, "--indices", *in.Indices)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1219,11 +1475,11 @@ func handleEvidenceBundle(ctx context.Context, _ *mcp.CallToolRequest, in eviden
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"evidence", "bundle"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"evidence", "bundle"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_create_pcap_slice")
+	out.suggestTool("create_pcap_slice")
 	return successResult(out)
 }
 
@@ -1241,7 +1497,7 @@ func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verif
 	}
 
 	resp := map[string]any{
-		"tool":   "gowireshark_verify_zeek_alert",
+		"tool":   "verify_zeek_alert",
 		"file":   file,
 		"filter": filter,
 	}
@@ -1249,25 +1505,25 @@ func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verif
 		resp["alert"] = in.Alert
 	}
 
-	if out, err := runGowireshark(ctx, "filter", "validate-detailed", "--expr", filter); err != nil {
+	if out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", filter); err != nil {
 		resp["filter_valid"] = false
 		resp["filter_error"] = err.Error()
-		resp["suggestion"] = "Call gowireshark_suggest_filter and retry with valid Wireshark display fields."
+		resp["suggestion"] = "Call suggest_filter and retry with valid Wireshark display fields."
 	} else {
 		resp["filter_valid"] = true
 		resp["filter_validation"] = parseOutput(out)
 	}
-	if out, err := runGowireshark(ctx, "frames", "page", "--file", file, "--page", "1", "--size", "20", "--filter", filter); err != nil {
+	if out, err := runEpan(ctx, "frames", "page", "--file", file, "--page", "1", "--size", "20", "--filter", filter); err != nil {
 		resp["candidate_frames_error"] = err.Error()
 	} else {
 		resp["candidate_frames"] = parseOutput(out)
 	}
-	if out, err := runGowireshark(ctx, "streams", "list", "--file", file, "--filter", filter); err != nil {
+	if out, err := runEpan(ctx, "streams", "list", "--file", file, "--filter", filter); err != nil {
 		resp["streams_error"] = err.Error()
 	} else {
 		resp["streams"] = parseOutput(out)
 	}
-	if out, err := runGowireshark(ctx, "expert", "list", "--file", file, "--filter", filter); err != nil {
+	if out, err := runEpan(ctx, "expert", "list", "--file", file, "--filter", filter); err != nil {
 		resp["expert_findings_error"] = err.Error()
 	} else {
 		resp["expert_findings"] = parseOutput(out)
@@ -1368,7 +1624,7 @@ func handleTapConversations(ctx context.Context, _ *mcp.CallToolRequest, in tapC
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1391,7 +1647,7 @@ func handleTapEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in tapEndpo
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1410,7 +1666,7 @@ func handleSRTList(ctx context.Context, _ *mcp.CallToolRequest, in srtListIn) (*
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1429,7 +1685,7 @@ func handleExportObjectList(ctx context.Context, _ *mcp.CallToolRequest, in expo
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1458,7 +1714,7 @@ func handleExportObjectWrite(ctx context.Context, _ *mcp.CallToolRequest, in exp
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
-	out, err := runGowireshark(ctx, args...)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1470,11 +1726,11 @@ func handleStatsSummary(ctx context.Context, _ *mcp.CallToolRequest, in statsSum
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, fileFilterCLI([]string{"stats"}, file, in.Filter)...)
+	out, err := runEpan(ctx, fileFilterCLI([]string{"stats"}, file, in.Filter)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("gowireshark_create_evidence_bundle")
+	out.suggestTool("create_evidence_bundle")
 	return successResult(out)
 }
 
@@ -1490,7 +1746,7 @@ func handleExtractFiles(ctx context.Context, _ *mcp.CallToolRequest, in extractF
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runGowireshark(ctx, "extract", "--file", file, "--out", outPath)
+	out, err := runEpan(ctx, "extract", "--file", file, "--out", outPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1498,7 +1754,7 @@ func handleExtractFiles(ctx context.Context, _ *mcp.CallToolRequest, in extractF
 }
 
 func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp.CallToolResult, map[string]any, error) {
-	bin := gowiresharkBin()
+	bin := epanBin()
 	absBin, _ := exec.LookPath(bin)
 
 	result := map[string]any{
@@ -1511,10 +1767,10 @@ func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp
 		"wiresharkLibDir":           os.Getenv("WIRESHARK_LIB_DIR"),
 		"wiresharkDataDir":          os.Getenv("WIRESHARK_DATA_DIR"),
 		"wiresharkConfDir":          os.Getenv("WIRESHARK_CONF_DIR"),
-		"gowiresharkPcapDir":        os.Getenv("GOWIRESHARK_PCAP_DIR"),
-		"gowiresharkOutputDir":      os.Getenv("GOWIRESHARK_OUTPUT_DIR"),
-		"gowiresharkTimeout":        os.Getenv("GOWIRESHARK_TIMEOUT"),
-		"gowiresharkMaxOutputBytes": os.Getenv("GOWIRESHARK_MAX_OUTPUT_BYTES"),
+		"epanPcapDir":        os.Getenv("EPAN_PCAP_DIR"),
+		"epanOutputDir":      os.Getenv("EPAN_OUTPUT_DIR"),
+		"epanTimeout":        os.Getenv("EPAN_TIMEOUT"),
+		"epanMaxOutputBytes": os.Getenv("EPAN_MAX_OUTPUT_BYTES"),
 	}
 
 	// List available PCAP files in the allowed directory
@@ -1537,10 +1793,10 @@ func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp
 			result["pcapDirError"] = err.Error()
 		}
 	} else {
-		result["pcapDirNote"] = "GOWIRESHARK_PCAP_DIR not set; any absolute path is accepted"
+		result["pcapDirNote"] = "PCAP_DIR not set; any absolute path is accepted"
 	}
 
-	verOut, verErr := runGowireshark(ctx, "version")
+	verOut, verErr := runEpan(ctx, "version")
 	if verErr != nil {
 		result["runtimeStatus"] = fmt.Sprintf("unavailable: %v", verErr)
 	} else {
@@ -1564,18 +1820,18 @@ func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp
 
 func registerResources(srv *mcp.Server) {
 	srv.AddResource(&mcp.Resource{
-		URI:         "gowireshark://pcaps",
+		URI:         "epan://pcaps",
 		Name:        "Available PCAPs",
-		Description: "Lists PCAP files in the allowed GOWIRESHARK_PCAP_DIR directory",
+		Description: "Lists PCAP files in the allowed PCAP_DIR directory",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		dir := pcapDir()
 		if dir == "" {
 			return &mcp.ReadResourceResult{
 				Contents: []*mcp.ResourceContents{{
-					URI:      "gowireshark://pcaps",
+					URI:      "epan://pcaps",
 					MIMEType: "application/json",
-					Text:     `{"pcaps":[],"error":"GOWIRESHARK_PCAP_DIR not set"}`,
+					Text:     `{"pcaps":[],"error":"PCAP_DIR not set"}`,
 				}},
 			}, nil
 		}
@@ -1583,7 +1839,7 @@ func registerResources(srv *mcp.Server) {
 		if err != nil {
 			return &mcp.ReadResourceResult{
 				Contents: []*mcp.ResourceContents{{
-					URI:      "gowireshark://pcaps",
+					URI:      "epan://pcaps",
 					MIMEType: "application/json",
 					Text:     fmt.Sprintf(`{"pcaps":[],"error":%q}`, err.Error()),
 				}},
@@ -1613,7 +1869,7 @@ func registerResources(srv *mcp.Server) {
 		data, _ := json.MarshalIndent(map[string]any{"pcaps": pcaps, "directory": dir}, "", "  ")
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{{
-				URI:      "gowireshark://pcaps",
+				URI:      "epan://pcaps",
 				MIMEType: "application/json",
 				Text:     string(data),
 			}},
@@ -1621,9 +1877,9 @@ func registerResources(srv *mcp.Server) {
 	})
 
 	srv.AddResource(&mcp.Resource{
-		URI:         "gowireshark://outputs",
+		URI:         "epan://outputs",
 		Name:        "Output files",
-		Description: "Lists files in the allowed GOWIRESHARK_OUTPUT_DIR directory",
+		Description: "Lists files in the allowed OUTPUT_DIR directory",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		dir := outputDir()
@@ -1631,7 +1887,7 @@ func registerResources(srv *mcp.Server) {
 		if err != nil {
 			return &mcp.ReadResourceResult{
 				Contents: []*mcp.ResourceContents{{
-					URI:      "gowireshark://outputs",
+					URI:      "epan://outputs",
 					MIMEType: "application/json",
 					Text:     fmt.Sprintf(`{"outputs":[],"error":%q}`, err.Error()),
 				}},
@@ -1656,7 +1912,7 @@ func registerResources(srv *mcp.Server) {
 		data, _ := json.MarshalIndent(map[string]any{"outputs": outputs, "directory": dir}, "", "  ")
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{{
-				URI:      "gowireshark://outputs",
+				URI:      "epan://outputs",
 				MIMEType: "application/json",
 				Text:     string(data),
 			}},
@@ -1664,15 +1920,15 @@ func registerResources(srv *mcp.Server) {
 	})
 
 	srv.AddResource(&mcp.Resource{
-		URI:         "gowireshark://docs/cli-reference",
+		URI:         "epan://docs/cli-reference",
 		Name:        "CLI Reference",
-		Description: "Built-in gowireshark CLI command reference for agent workflows",
+		Description: "Built-in epan CLI command reference for agent workflows",
 		MIMEType:    "text/markdown",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		ref := cliReferenceMarkdown()
 		return &mcp.ReadResourceResult{
 			Contents: []*mcp.ResourceContents{{
-				URI:      "gowireshark://docs/cli-reference",
+				URI:      "epan://docs/cli-reference",
 				MIMEType: "text/markdown",
 				Text:     ref,
 			}},
@@ -1680,9 +1936,9 @@ func registerResources(srv *mcp.Server) {
 	})
 
 	srv.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate: "gowireshark://pcap/{name}/summary",
+		URITemplate: "epan://pcap/{name}/summary",
 		Name:        "PCAP Summary",
-		Description: "Lightweight summary (frame count, streams, expert infos) for a named PCAP file in GOWIRESHARK_PCAP_DIR",
+		Description: "Lightweight summary (frame count, streams, expert infos) for a named PCAP file in PCAP_DIR",
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return pcapSummaryResource(ctx, req.Params.URI)
@@ -1690,7 +1946,7 @@ func registerResources(srv *mcp.Server) {
 }
 
 func pcapSummaryResource(ctx context.Context, uri string) (*mcp.ReadResourceResult, error) {
-	const prefix = "gowireshark://pcap/"
+	const prefix = "epan://pcap/"
 	const suffix = "/summary"
 	if !strings.HasPrefix(uri, prefix) || !strings.HasSuffix(uri, suffix) {
 		return nil, mcp.ResourceNotFoundError(uri)
@@ -1705,17 +1961,17 @@ func pcapSummaryResource(ctx context.Context, uri string) (*mcp.ReadResourceResu
 	}
 
 	summary := map[string]any{"name": name, "path": file}
-	if countOut, err := runGowireshark(ctx, "frames", "count", "--file", file); err != nil {
+	if countOut, err := runEpan(ctx, "frames", "count", "--file", file); err != nil {
 		summary["frameCountError"] = err.Error()
 	} else if parsed := parseOutput(countOut); parsed != nil {
 		summary["frameCount"] = parsed["count"]
 	}
-	if streamsOut, err := runGowireshark(ctx, "streams", "list", "--file", file); err != nil {
+	if streamsOut, err := runEpan(ctx, "streams", "list", "--file", file); err != nil {
 		summary["streamsError"] = err.Error()
 	} else if parsed := parseOutput(streamsOut); parsed != nil {
 		summary["streamsCount"] = listLen(parsed["list"])
 	}
-	if expertOut, err := runGowireshark(ctx, "expert", "list", "--file", file); err != nil {
+	if expertOut, err := runEpan(ctx, "expert", "list", "--file", file); err != nil {
 		summary["expertError"] = err.Error()
 	} else if parsed := parseOutput(expertOut); parsed != nil {
 		summary["expertCount"] = listLen(parsed["list"])
@@ -1743,13 +1999,13 @@ func listLen(v any) int {
 
 func cliReferenceMarkdown() string {
 	candidates := []string{
-		filepath.Join(".codex", "skills", "gowireshark", "references", "cli-reference.md"),
+		filepath.Join(".codex", "skills", "epan", "references", "cli-reference.md"),
 		filepath.Join("agents", "pcap-analysis-rules.md"),
 	}
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		candidates = append(candidates,
-			filepath.Join(exeDir, "..", ".codex", "skills", "gowireshark", "references", "cli-reference.md"),
+			filepath.Join(exeDir, "..", ".codex", "skills", "epan", "references", "cli-reference.md"),
 			filepath.Join(exeDir, "..", "agents", "pcap-analysis-rules.md"),
 		)
 	}
@@ -1759,78 +2015,78 @@ func cliReferenceMarkdown() string {
 			return string(data)
 		}
 	}
-	return `# gowireshark CLI Reference
+	return `# epan CLI Reference
 
 ## System & Discovery
 
 ` + "`" + "`" + "`" + `bash
-gowireshark version
-gowireshark filter validate --expr 'tcp.port == 80'
-gowireshark filter validate-detailed --expr 'tcp.stream'
-gowireshark filter suggest --prefix 'tcp.'
-gowireshark metadata protocols
-gowireshark metadata fields
-gowireshark metadata field --name tcp.stream
+epan version
+epan filter validate --expr 'tcp.port == 80'
+epan filter validate-detailed --expr 'tcp.stream'
+epan filter suggest --prefix 'tcp.'
+epan metadata protocols
+epan metadata fields
+epan metadata field --name tcp.stream
 ` + "`" + "`" + "`" + `
 
 ## Frame Inspection
 
 ` + "`" + "`" + "`" + `bash
-gowireshark frames count --file capture.pcap --filter 'tcp'
-gowireshark frames page --file capture.pcap --page 1 --size 20 --filter 'http'
-gowireshark frames get --file capture.pcap --index 5
-gowireshark frames batch --file capture.pcap --indices 1,5,10
-gowireshark frames hex --file capture.pcap --index 5
-gowireshark frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
-gowireshark frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
+epan frames count --file capture.pcap --filter 'tcp'
+epan frames page --file capture.pcap --page 1 --size 20 --filter 'http'
+epan frames get --file capture.pcap --index 5
+epan frames batch --file capture.pcap --indices 1,5,10
+epan frames hex --file capture.pcap --index 5
+epan frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
+epan frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
 ` + "`" + "`" + "`" + `
 
 ## Traffic Analysis
 
 ` + "`" + "`" + "`" + `bash
-gowireshark streams list --file capture.pcap --filter 'tcp'
-gowireshark traffic conversations list --file capture.pcap --filter 'dns'
-gowireshark traffic timeline summary --file capture.pcap
-gowireshark traffic files list --file capture.pcap
+epan streams list --file capture.pcap --filter 'tcp'
+epan traffic conversations list --file capture.pcap --filter 'dns'
+epan traffic timeline summary --file capture.pcap
+epan traffic files list --file capture.pcap
 ` + "`" + "`" + "`" + `
 
 ## Stream Reassembly
 
 ` + "`" + "`" + "`" + `bash
-gowireshark follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
-gowireshark follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
+epan follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
+epan follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
 ` + "`" + "`" + "`" + `
 
 ## Expert & Evidence
 
 ` + "`" + "`" + "`" + `bash
-gowireshark expert list --file capture.pcap --filter 'tcp'
-gowireshark slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
-gowireshark slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
-gowireshark evidence bundle --file capture.pcap --filter 'tcp.port == 80'
+epan expert list --file capture.pcap --filter 'tcp'
+epan slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
+epan slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
+epan evidence bundle --file capture.pcap --filter 'tcp.port == 80'
 ` + "`" + "`" + "`" + `
 
 ## Tap & SRT
 
 ` + "`" + "`" + "`" + `bash
-gowireshark tap conversations --file capture.pcap --type tcp --filter 'tcp'
-gowireshark tap endpoints --file capture.pcap --type ip
-gowireshark srt list --file capture.pcap --protocol smb
-gowireshark srt list --file capture.pcap --protocol dns
+epan tap conversations --file capture.pcap --type tcp --filter 'tcp'
+epan tap endpoints --file capture.pcap --type ip
+epan srt list --file capture.pcap --protocol smb
+epan srt list --file capture.pcap --protocol dns
 ` + "`" + "`" + "`" + `
 
 ## Export Objects
 
 ` + "`" + "`" + "`" + `bash
-gowireshark export-object list --file capture.pcap --protocol http
-gowireshark export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
+epan export-object list --file capture.pcap --protocol http
+epan export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
 ` + "`" + "`" + "`" + `
 
 ## Stats & Extract
 
 ` + "`" + "`" + "`" + `bash
-gowireshark stats --file capture.pcap --filter 'tcp'
-gowireshark extract --file capture.pcap --out extracted-files/
+epan stats --file capture.pcap --filter 'tcp'
+epan extract --file capture.pcap --out extracted-files/
 ` + "`" + "`" + "`" + `
 
 ## Guidance
@@ -1841,7 +2097,7 @@ gowireshark extract --file capture.pcap --out extracted-files/
 - ` + "`" + `slice pcap` + "`" + ` creates a new pcap from selected frames.
 - ` + "`" + `evidence bundle` + "`" + ` produces comprehensive forensic metadata.
 - ` + "`" + `export-object write` + "`" + ` extracts HTTP objects to disk.
-- Always validate new display filters with ` + "`" + `gowireshark filter validate-detailed` + "`" + ` before using them.
+- Always validate new display filters with ` + "`" + `epan filter validate-detailed` + "`" + ` before using them.
 `
 }
 
@@ -1860,20 +2116,20 @@ func registerPrompts(srv *mcp.Server) {
 					Text: `I need to perform initial triage on a PCAP file. Please follow this workflow:
 
 1. First, gauge the capture size:
-   - Use gowireshark_count_frames to count frames
+   - Use count_frames to count frames
 
 2. Map the traffic structure:
-   - Use gowireshark_list_streams to see TCP/UDP streams
+   - Use list_streams to see TCP/UDP streams
 
 3. Check for anomalies:
-   - Use gowireshark_list_expert_findings to find protocol violations, warnings
+   - Use list_expert_findings to find protocol violations, warnings
 
 4. Get protocol distribution:
-   - Use gowireshark_get_stats_summary for a statistical overview
+   - Use stats_summary for a statistical overview
 
 5. Summarize your findings: protocol distribution, stream count, notable anomalies.
 
-IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_list_frames) only when you need to inspect specific packets.`,
+IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (list_frames) only when you need to inspect specific packets.`,
 				},
 			}},
 		}, nil
@@ -1891,21 +2147,21 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_l
 					Text: `I need to perform a deep-dive analysis on a specific network stream. Please follow this workflow:
 
 1. First, identify the stream ID:
-   - Use gowireshark_list_streams to list all streams
+   - Use list_streams to list all streams
    - Note: only follow streams where streamId >= 0
 
 2. Follow the stream to get reassembled payload:
-   - Use gowireshark_follow_stream with protocol=tcp|udp and filter='tcp.stream eq N'
+   - Use follow_stream with protocol=tcp|udp and filter='tcp.stream eq N'
 
 3. Inspect key frames in the stream:
-   - Use gowireshark_list_frames with filter='tcp.stream eq N'
-   - Look at frame content using gowireshark_get_frame
+   - Use list_frames with filter='tcp.stream eq N'
+   - Look at frame content using get_frame
 
 4. Check for any objects embedded in the stream:
-   - Use gowireshark_list_exportable_objects with protocol=http (if HTTP)
+   - Use exportable_objects with protocol=http (if HTTP)
 
 5. If HTTP objects found, extract relevant ones:
-   - Use gowireshark_write_exported_object
+   - Use write_exportable_object
 
 6. Summarize what the stream contains: protocol type, payload content, any extracted objects.`,
 				},
@@ -1925,20 +2181,20 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_l
 					Text: `I need to produce forensic evidence from a PCAP file. Please follow this workflow:
 
 1. Start with triage to understand the capture:
-   - Use gowireshark_count_frames, gowireshark_list_streams, gowireshark_list_expert_findings
-   - Use gowireshark_get_stats_summary for statistical overview
+   - Use count_frames, list_streams, list_expert_findings
+   - Use stats_summary for statistical overview
 
 2. Narrow scope with validated filters:
    - Construct a display filter for the traffic of interest
-   - ALWAYS validate: use gowireshark_validate_filter with your filter expression
+   - ALWAYS validate: use validate_filter with your filter expression
    - DO NOT guess Wireshark display filter syntax
 
 3. Slice the PCAP to isolate evidence:
-   - Use gowireshark_create_pcap_slice with your validated filter
-   - Verify the slice with gowireshark_count_frames on the output
+   - Use create_pcap_slice with your validated filter
+   - Verify the slice with count_frames on the output
 
 4. Build the evidence bundle:
-   - Use gowireshark_create_evidence_bundle with your validated filter
+   - Use create_evidence_bundle with your validated filter
    - This produces conversations, expert infos, protocol hierarchy
 
 5. Present findings:
@@ -1963,19 +2219,19 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (gowireshark_l
 					Text: `I need to extract HTTP objects from a PCAP file. Please follow this workflow:
 
 1. List all exportable HTTP objects:
-   - Use gowireshark_list_exportable_objects with protocol=http
+   - Use exportable_objects with protocol=http
 
 2. Review the object list for interesting items:
    - Look at content types, sizes, filenames
    - Identify objects relevant to the investigation
 
 3. Extract specific objects:
-   - Use gowireshark_write_exported_object for each interesting object
+   - Use write_exportable_object for each interesting object
    - Provide the packetNum (packet number) for each object to extract
-   - Output must go to GOWIRESHARK_OUTPUT_DIR
+   - Output must go to OUTPUT_DIR
 
 4. For bulk extraction of all detected files:
-   - Use gowireshark_extract_files with the out directory
+   - Use extract_files with the out directory
 
 5. Report what was extracted: object types, filenames, sizes, and where they were saved.`,
 				},

@@ -1,6 +1,6 @@
-module github.com/randolphcyg/gowireshark-cli
+module github.com/randolphcyg/epan
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1

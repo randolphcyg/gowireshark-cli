@@ -5,13 +5,13 @@ Codex project guidance should normally live in a root `AGENTS.md`. This package 
 Recommended setup in a target project:
 
 ```bash
-cp /path/to/gowireshark-cli-<target>/.codex/AGENTS.md ./AGENTS.md
+cp /path/to/epan-<target>/.codex/AGENTS.md ./AGENTS.md
 ```
 
 If your Codex runtime supports MCP configuration, point it at:
 
 ```bash
-/path/to/gowireshark-cli-<target>/bin/gowireshark-mcp-env
+/path/to/epan-<target>/bin/epan-mcp-env
 ```
 
 Keep real MCP config local unless your team intentionally shares it.

@@ -16,7 +16,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: gowireshark <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>")
+		fatal("usage: epan <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>")
 	}
 	switch os.Args[1] {
 	case "version":
@@ -58,7 +58,7 @@ func main() {
 
 func filterCmd(args []string) {
 	if len(args) < 1 {
-		fatal("usage: gowireshark filter <validate|validate-detailed|suggest>")
+		fatal("usage: epan filter <validate|validate-detailed|suggest>")
 	}
 	switch args[0] {
 	case "validate":
@@ -101,7 +101,7 @@ func filterCmd(args []string) {
 
 func metadataCmd(args []string) {
 	if len(args) < 1 {
-		fatal("usage: gowireshark metadata <protocols|fields|field>")
+		fatal("usage: epan metadata <protocols|fields|field>")
 	}
 	switch args[0] {
 	case "protocols":
@@ -129,7 +129,7 @@ func metadataCmd(args []string) {
 
 func framesCmd(args []string) {
 	if len(args) == 0 {
-		fatal("usage: gowireshark frames <count|page|get|batch|hex|write|fields>")
+		fatal("usage: epan frames <count|page|get|batch|hex|write|fields>")
 	}
 	opts := newFrameOpts(args[1:])
 	switch args[0] {
@@ -195,7 +195,7 @@ func framesCmd(args []string) {
 
 func streamsCmd(args []string) {
 	if len(args) < 1 || args[0] != "list" {
-		fatal("usage: gowireshark streams list --file <pcap>")
+		fatal("usage: epan streams list --file <pcap>")
 	}
 	fs := flag.NewFlagSet("streams list", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
@@ -210,12 +210,12 @@ func streamsCmd(args []string) {
 
 func trafficCmd(args []string) {
 	if len(args) < 1 {
-		fatal("usage: gowireshark traffic <conversations|timeline|files>")
+		fatal("usage: epan traffic <conversations|timeline|files>")
 	}
 	switch args[0] {
 	case "conversations":
 		if len(args) < 2 || args[1] != "list" {
-			fatal("usage: gowireshark traffic conversations list --file <pcap>")
+			fatal("usage: epan traffic conversations list --file <pcap>")
 		}
 		fs := flag.NewFlagSet("traffic conversations list", flag.ExitOnError)
 		file := fs.String("file", "", "pcap path")
@@ -227,7 +227,7 @@ func trafficCmd(args []string) {
 		writeJSON(map[string]any{"list": convs})
 	case "timeline":
 		if len(args) < 2 || args[1] != "summary" {
-			fatal("usage: gowireshark traffic timeline summary --file <pcap>")
+			fatal("usage: epan traffic timeline summary --file <pcap>")
 		}
 		fs := flag.NewFlagSet("traffic timeline summary", flag.ExitOnError)
 		file := fs.String("file", "", "pcap path")
@@ -239,7 +239,7 @@ func trafficCmd(args []string) {
 		writeJSON(map[string]any{"list": timeline})
 	case "files":
 		if len(args) < 2 || args[1] != "list" {
-			fatal("usage: gowireshark traffic files list --file <pcap>")
+			fatal("usage: epan traffic files list --file <pcap>")
 		}
 		fs := flag.NewFlagSet("traffic files list", flag.ExitOnError)
 		file := fs.String("file", "", "pcap path")
@@ -256,7 +256,7 @@ func trafficCmd(args []string) {
 
 func expertCmd(args []string) {
 	if len(args) < 1 || args[0] != "list" {
-		fatal("usage: gowireshark expert list --file <pcap>")
+		fatal("usage: epan expert list --file <pcap>")
 	}
 	fs := flag.NewFlagSet("expert list", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
@@ -282,7 +282,7 @@ func followCmd(args []string) {
 
 func sliceCmd(args []string) {
 	if len(args) < 1 || args[0] != "pcap" {
-		fatal("usage: gowireshark slice pcap --file <pcap> --out <output.pcap>")
+		fatal("usage: epan slice pcap --file <pcap> --out <output.pcap>")
 	}
 	fs := flag.NewFlagSet("slice pcap", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
@@ -309,7 +309,7 @@ func sliceCmd(args []string) {
 
 func evidenceCmd(args []string) {
 	if len(args) < 1 || args[0] != "bundle" {
-		fatal("usage: gowireshark evidence bundle --file <pcap>")
+		fatal("usage: epan evidence bundle --file <pcap>")
 	}
 	fs := flag.NewFlagSet("evidence bundle", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
@@ -323,7 +323,7 @@ func evidenceCmd(args []string) {
 
 func tapCmd(args []string) {
 	if len(args) < 1 {
-		fatal("usage: gowireshark tap <conversations|endpoints>")
+		fatal("usage: epan tap <conversations|endpoints>")
 	}
 	switch args[0] {
 	case "conversations":
@@ -353,7 +353,7 @@ func tapCmd(args []string) {
 
 func srtCmd(args []string) {
 	if len(args) < 1 || args[0] != "list" {
-		fatal("usage: gowireshark srt list --file <pcap> --protocol <protocol>")
+		fatal("usage: epan srt list --file <pcap> --protocol <protocol>")
 	}
 	fs := flag.NewFlagSet("srt list", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
@@ -371,7 +371,7 @@ func srtCmd(args []string) {
 
 func exportObjCmd(args []string) {
 	if len(args) < 1 {
-		fatal("usage: gowireshark export-object <list|write>")
+		fatal("usage: epan export-object <list|write>")
 	}
 	switch args[0] {
 	case "list":
