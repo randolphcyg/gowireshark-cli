@@ -45,7 +45,23 @@ Use `epan` as a bounded forensic toolbox. Prefer the smallest command that answe
 
 ## MCP Tool Names
 
-MCP uses breaking, Agent-oriented names. Prefer `health_check`, `count_frames`, `list_streams`, `list_expert_findings`, `validate_filter`, `verify_zeek_alert`, `create_pcap_slice`, and `create_evidence_bundle`. Do not use removed legacy names.
+MCP uses Agent-oriented names consolidated from fine-grained CLI commands. The 11 tools are:
+
+| Tool | Purpose |
+|------|---------|
+| `triage_pcap` | Initial triage: frame count, streams, expert findings, stats, conversations |
+| `search_frames` | Search frames with filter, pagination, field extraction, or batch indices |
+| `get_frame` | Get single frame with optional hex and fields |
+| `inspect_stream` | Follow and reconstruct TCP/UDP stream |
+| `validate_filter` | Validate display filter (set `detailed=true` for field-level feedback) |
+| `suggest_filter` | Suggest field names by prefix |
+| `get_field_info` | Get metadata for a display filter field |
+| `slice_pcap` | Slice PCAP by filter or frame indices |
+| `build_evidence` | Build evidence bundle: conversations, endpoints, expert infos, protocol hierarchy |
+| `export_objects` | List or extract exportable objects (HTTP, SMB, etc.) with `action=list\|extract` |
+| `verify_zeek_alert` | Verify Zeek alert against packet evidence |
+
+Do not use removed legacy names: `count_frames`, `list_streams`, `list_expert_findings`, `create_pcap_slice`, `create_evidence_bundle`, `follow_stream`, `tap_conversations`, `tap_endpoints`, `service_response_times`, `exportable_objects`, `write_exportable_object`, `stats_summary`, `validate_filter_detailed`, `list_fields`, `list_conversations`, `timeline_summary`, `list_files`, `get_frames_batch`, `get_frame_hex`, `get_frame_fields`, `list_protocols`, `extract_files`.
 
 ## Validation
 

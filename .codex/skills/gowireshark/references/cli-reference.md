@@ -1,88 +1,73 @@
-# CLI reference
+# MCP Tool Reference
 
-## System & Discovery
+## Core Analysis
+
+```
+triage_pcap(file, filter?)       — Frame count, streams, expert findings, stats, conversations
+search_frames(file, filter?, page?, size?, fields?, indices?) — Paginated/batch/field frame search
+get_frame(file, index, include_hex?, fields?) — Single frame with optional hex and fields
+inspect_stream(file, protocol?, filter?) — Follow and reconstruct TCP/UDP stream
+```
+
+## Filter Helpers
+
+```
+validate_filter(expr, detailed?) — Validate display filter, set detailed=true for field feedback
+suggest_filter(prefix, limit?)   — Suggest field names by prefix (e.g. 'tcp.')
+```
+
+## Metadata
+
+```
+get_field_info(name)            — Get metadata for a field (e.g. 'tcp.stream')
+```
+
+> Protocols are exposed as the `epan://docs/protocols` Resource (not a Tool). Use `list_protocols` via Resource access.
+
+## Evidence & Export
+
+```
+slice_pcap(file, out, filter?, indices?)  — Slice PCAP by filter or indices
+build_evidence(file, filter?)             — Conversations, endpoints, expert infos, protocol hierarchy
+export_objects(file, protocol, action?, packet_num?, out?) — List or extract exportable objects (HTTP, SMB, etc.)
+verify_zeek_alert(file, filter?, alert?, ...) — Verify Zeek alert against packet evidence
+```
+
+## CLI Equivalents (for reference)
+
+The MCP tools wrap the following CLI commands:
 
 ```bash
-epan version
-epan filter validate --expr 'tcp.port == 80'
-epan filter validate-detailed --expr 'tcp.stream'
-epan filter suggest --prefix 'tcp.'
+epan frames count --file <file> [--filter <expr>]
+epan streams list --file <file> [--filter <expr>]
+epan expert list --file <file> [--filter <expr>]
+epan stats --file <file> [--filter <expr>]
+epan traffic conversations list --file <file> [--filter <expr>]
+epan frames page --file <file> --page N --size N [--filter <expr>]
+epan frames batch --file <file> --indices 1,5,10
+epan frames fields --file <file> --fields ip.src,ip.dst [--filter <expr>]
+epan frames get --file <file> --index N
+epan frames hex --file <file> --index N
+epan follow --file <file> --protocol tcp|udp --filter '<expr>'
+epan filter validate --expr '<expr>'
+epan filter validate-detailed --expr '<expr>'
+epan filter suggest --prefix '<prefix>'
+epan metadata field --name <name>
 epan metadata protocols
-epan metadata fields
-epan metadata field --name tcp.stream
+epan slice pcap --file <file> --out <out> [--filter <expr>] [--indices <indices>]
+epan evidence bundle --file <file> [--filter <expr>]
+epan tap endpoints --file <file> --type ip [--filter <expr>]
+epan export-object list --file <file> --protocol <proto>
+epan export-object write --file <file> --protocol <proto> --packet-num N --out <out>
+epan extract --file <file> --out <dir>
 ```
-
-## Frame Inspection
-
-```bash
-epan frames count --file capture.pcap --filter 'tcp'
-epan frames page --file capture.pcap --page 1 --size 20 --filter 'http'
-epan frames get --file capture.pcap --index 5
-epan frames batch --file capture.pcap --indices 1,5,10
-epan frames hex --file capture.pcap --index 5
-epan frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
-epan frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
-```
-
-## Traffic Analysis
-
-```bash
-epan streams list --file capture.pcap --filter 'tcp'
-epan traffic conversations list --file capture.pcap --filter 'dns'
-epan traffic timeline summary --file capture.pcap
-epan traffic files list --file capture.pcap
-```
-
-## Stream Reassembly
-
-```bash
-epan follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
-epan follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
-```
-
-## Expert & Evidence
-
-```bash
-epan expert list --file capture.pcap --filter 'tcp'
-epan slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
-epan slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
-epan evidence bundle --file capture.pcap --filter 'tcp.port == 80'
-```
-
-## Tap & SRT
-
-```bash
-epan tap conversations --file capture.pcap --type tcp --filter 'tcp'
-epan tap endpoints --file capture.pcap --type ip
-epan srt list --file capture.pcap --protocol smb
-epan srt list --file capture.pcap --protocol dns
-```
-
-## Export Objects
-
-```bash
-epan export-object list --file capture.pcap --protocol http
-epan export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
-```
-
-## Stats & Extraction
-
-```bash
-epan stats --file capture.pcap --filter 'tcp'
-epan extract --file capture.pcap --out extracted-files/
-```
-
-## Common Flags
-
-Most commands support: `--filter`, `--compact`, `--raw-json`
-
-Flags planned for future SDK support: `--decode-as`, `--profile`, `--pref`, `--name-resolution`, `--parse-mode`, `--layers`
 
 ## Guidance
 
-- `frames page` is the default inspection command for large pcaps.
-- `streams list` reveals followable streams (look for `streamId >= 0` and use the `followFilter` field).
-- `follow` expects a Wireshark display filter that narrows the desired stream (e.g. `tcp.stream eq 0`).
-- `slice pcap` creates a new pcap from selected frames; verify with `frames count` on the output.
-- `evidence bundle` produces comprehensive forensic metadata including conversations, expert infos, and protocol hierarchy.
-- `export-object write` extracts HTTP objects to disk; use only when the task needs artifacts, not just metadata.
+- Use `triage_pcap` as the first command for any new PCAP.
+- `search_frames` is the default inspection command for paginated views.
+- `inspect_stream` expects a Wireshark display filter (e.g. `tcp.stream eq 0`).
+- `slice_pcap` creates a new pcap from selected frames.
+- `build_evidence` produces comprehensive forensic metadata.
+- `export_objects` with action=extract extracts exportable objects to disk.
+- Always validate new display filters with `validate_filter` with detailed=true before using them.

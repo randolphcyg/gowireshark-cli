@@ -175,36 +175,17 @@ func TestResolveOutputPathRelativeAndSymlinkEscape(t *testing.T) {
 
 func TestToolRegistration(t *testing.T) {
 	toolNames := []string{
-		"get_version",
-		"validate_filter",
-		"validate_filter_detailed",
-		"suggest_filter",
-		"list_protocols",
-		"list_fields",
-		"get_field_info",
-		"count_frames",
-		"list_frames",
+		"triage_pcap",
+		"search_frames",
 		"get_frame",
-		"get_frames_batch",
-		"get_frame_hex",
-		"get_frame_fields",
-		"list_streams",
-		"list_conversations",
-		"timeline_summary",
-		"list_files",
-		"list_expert_findings",
-		"follow_stream",
-		"create_pcap_slice",
-		"create_evidence_bundle",
+		"inspect_stream",
+		"validate_filter",
+		"suggest_filter",
+		"get_field_info",
+		"slice_pcap",
+		"build_evidence",
+		"export_objects",
 		"verify_zeek_alert",
-		"tap_conversations",
-		"tap_endpoints",
-		"service_response_times",
-		"exportable_objects",
-		"write_exportable_object",
-		"stats_summary",
-		"extract_files",
-		"health_check",
 	}
 
 	seen := make(map[string]bool)
@@ -216,12 +197,10 @@ func TestToolRegistration(t *testing.T) {
 	}
 
 	expectedNewTools := []string{
-		"list_protocols",
-		"list_fields",
-		"stats_summary",
-		"extract_files",
-		"health_check",
-		"verify_zeek_alert",
+		"triage_pcap",
+		"search_frames",
+		"build_evidence",
+		"export_objects",
 	}
 	for _, name := range expectedNewTools {
 		if !seen[name] {
@@ -231,20 +210,24 @@ func TestToolRegistration(t *testing.T) {
 }
 
 func TestExportObjectWriteHasFilter(t *testing.T) {
-	in := exportObjectWriteIn{
+	in := exportObjectsIn{
 		File:      "test.pcap",
-		Protocol:  "http",
-		PacketNum: 42,
-		Out:       "/tmp/out.dat",
+		Protocol:  strPtr("http"),
+		PacketNum: intPtr(42),
+		OutputDir: strPtr("/tmp/out"),
 		Filter:    strPtr("tcp.port == 80"),
 	}
 	if in.Filter == nil || *in.Filter != "tcp.port == 80" {
-		t.Error("exportObjectWriteIn should have filter field")
+		t.Error("exportObjectsIn should have filter field")
 	}
 }
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func intPtr(i int) *int {
+	return &i
 }
 
 func TestTruncationMetadata(t *testing.T) {
@@ -256,7 +239,7 @@ func TestTruncationMetadata(t *testing.T) {
 		Truncated:         true,
 		MaxOutputBytes:    1024,
 		OriginalBytes:     2048,
-		SuggestedNextTool: "create_pcap_slice",
+		SuggestedNextTool: "slice_pcap",
 	}
 
 	result := buildResult(out.Text, out)
@@ -276,8 +259,8 @@ func TestTruncationMetadata(t *testing.T) {
 	if result.Meta["originalBytes"] != int64(2048) {
 		t.Errorf("Meta.originalBytes = %v, want 2048", result.Meta["originalBytes"])
 	}
-	if result.Meta["suggestedNextTool"] != "create_pcap_slice" {
-		t.Errorf("Meta.suggestedNextTool = %v, want create_pcap_slice", result.Meta["suggestedNextTool"])
+	if result.Meta["suggestedNextTool"] != "slice_pcap" {
+		t.Errorf("Meta.suggestedNextTool = %v, want slice_pcap", result.Meta["suggestedNextTool"])
 	}
 
 	if !strings.Contains(out.Text, "truncated") {
@@ -343,21 +326,21 @@ func TestInputValidation(t *testing.T) {
 }
 
 func TestExportObjectWriteFilterPassthrough(t *testing.T) {
-	in := exportObjectWriteIn{
+	in := exportObjectsIn{
 		File:      "test.pcap",
-		Protocol:  "http",
-		PacketNum: 42,
-		Out:       "/tmp/out.dat",
+		Protocol:  strPtr("http"),
+		PacketNum: intPtr(42),
+		OutputDir: strPtr("/tmp/out"),
 	}
 	if in.Filter != nil {
 		t.Error("Filter should default to nil (optional)")
 	}
 
-	in2 := exportObjectWriteIn{
+	in2 := exportObjectsIn{
 		File:      "test.pcap",
-		Protocol:  "http",
-		PacketNum: 42,
-		Out:       "/tmp/out.dat",
+		Protocol:  strPtr("http"),
+		PacketNum: intPtr(42),
+		OutputDir: strPtr("/tmp/out"),
 		Filter:    strPtr("tcp"),
 	}
 	if in2.Filter == nil || *in2.Filter != "tcp" {
@@ -366,7 +349,7 @@ func TestExportObjectWriteFilterPassthrough(t *testing.T) {
 }
 
 func TestPageSizeValidation(t *testing.T) {
-	in := framesPageIn{Page: 0, Size: 0}
+	in := searchFramesIn{Page: 0, Size: 0}
 	if in.Page < 1 {
 		in.Page = 1
 	}
@@ -534,51 +517,60 @@ func TestToolSchemasAdvertiseConstraints(t *testing.T) {
 		tools[tool.Name] = tool
 	}
 	for _, name := range []string{
-		"count_frames",
-		"list_frames",
+		"triage_pcap",
+		"search_frames",
 		"get_frame",
-		"health_check",
 		"verify_zeek_alert",
 	} {
 		if tools[name] == nil {
-			t.Fatalf("expected renamed tool %s to be listed", name)
+			t.Fatalf("expected tool %s to be listed", name)
 		}
 	}
 	for _, old := range []string{
-		"frames_count",
-		"frames_page",
-		"frames_get",
-		"doctor",
-		"expert_list",
+		"count_frames",
+		"list_frames",
+		"follow_stream",
+		"create_pcap_slice",
+		"create_evidence_bundle",
+		"tap_conversations",
+		"tap_endpoints",
+		"service_response_times",
+		"exportable_objects",
+		"write_exportable_object",
+		"stats_summary",
+		"validate_filter_detailed",
+		"list_fields",
+		"list_streams",
+		"list_conversations",
+		"timeline_summary",
+		"list_files",
+		"list_expert_findings",
+		"get_frames_batch",
+		"get_frame_hex",
+		"get_frame_fields",
 	} {
 		if tools[old] != nil {
 			t.Fatalf("old tool %s should not be listed", old)
 		}
 	}
 
-	framesPage := schemaMap(t, tools["list_frames"].InputSchema)
+	framesPage := schemaMap(t, tools["search_frames"].InputSchema)
 	requireContains(t, framesPage["required"], "file")
 	page := propertySchema(t, framesPage, "page")
 	if page["minimum"].(float64) != 1 {
-		t.Fatalf("frames_page page minimum = %v, want 1", page["minimum"])
+		t.Fatalf("search_frames page minimum = %v, want 1", page["minimum"])
 	}
 
-	follow := schemaMap(t, tools["follow_stream"].InputSchema)
+	follow := schemaMap(t, tools["inspect_stream"].InputSchema)
 	protocol := propertySchema(t, follow, "protocol")
 	requireContains(t, protocol["enum"], "tcp")
 	requireContains(t, protocol["enum"], "udp")
 
-	tap := schemaMap(t, tools["tap_endpoints"].InputSchema)
-	tapType := propertySchema(t, tap, "type")
-	requireContains(t, tapType["enum"], "eth")
-	requireContains(t, tapType["enum"], "udp")
-
-	exportWrite := schemaMap(t, tools["write_exportable_object"].InputSchema)
-	requireContains(t, exportWrite["required"], "packetNum")
-	packetNum := propertySchema(t, exportWrite, "packetNum")
-	if packetNum["minimum"].(float64) != 1 {
-		t.Fatalf("packetNum minimum = %v, want 1", packetNum["minimum"])
-	}
+	exportList := schemaMap(t, tools["export_objects"].InputSchema)
+	requireContains(t, exportList["required"], "file")
+	action := propertySchema(t, exportList, "action")
+	requireContains(t, action["enum"], "list")
+	requireContains(t, action["enum"], "extract")
 
 	verify := schemaMap(t, tools["verify_zeek_alert"].InputSchema)
 	requireContains(t, verify["required"], "file")
@@ -590,7 +582,7 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	os.Setenv("MCP_CALL_LOG_PATH", logPath)
 	defer os.Setenv("MCP_CALL_LOG_PATH", originalLog)
 
-	handler := tracedTool("count_frames", func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, map[string]any, error) {
+	handler := tracedTool("triage_pcap", func(ctx context.Context, req *mcp.CallToolRequest, in emptyIn) (*mcp.CallToolResult, map[string]any, error) {
 		return nil, nil, os.ErrNotExist
 	})
 	result, _, err := handler(context.Background(), &mcp.CallToolRequest{}, emptyIn{})
@@ -613,12 +605,12 @@ func TestTracedToolErrorEnvelopeAndLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read call log: %v", err)
 	}
-	if !strings.Contains(string(data), `"tool_name":"count_frames"`) {
+	if !strings.Contains(string(data), `"tool_name":"triage_pcap"`) {
 		t.Fatalf("call log missing tool name: %s", data)
 	}
 }
 
-func TestCountFramesDoesNotAdvertiseOutputSchema(t *testing.T) {
+func TestTriagePcapDoesNotAdvertiseOutputSchema(t *testing.T) {
 	cs, closeFn := startMCPTestSession(t)
 	defer closeFn()
 
@@ -627,8 +619,8 @@ func TestCountFramesDoesNotAdvertiseOutputSchema(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	for _, tool := range res.Tools {
-		if tool.Name == "count_frames" && tool.OutputSchema != nil {
-			t.Fatalf("count_frames output schema = %#v, want nil so clients accept CLI JSON structuredContent", tool.OutputSchema)
+		if tool.Name == "triage_pcap" && tool.OutputSchema != nil {
+			t.Fatalf("triage_pcap output schema = %#v, want nil so clients accept CLI JSON structuredContent", tool.OutputSchema)
 		}
 	}
 }
@@ -665,14 +657,14 @@ func TestDoctorOutputFields(t *testing.T) {
 
 func TestCliReferenceContent(t *testing.T) {
 	ref := cliReferenceMarkdown()
-	if !strings.Contains(ref, "epan version") {
-		t.Error("CLI reference should contain version command")
+	if !strings.Contains(ref, "triage_pcap") {
+		t.Error("CLI reference should contain triage_pcap")
 	}
-	if !strings.Contains(ref, "epan stats") {
-		t.Error("CLI reference should contain stats command")
+	if !strings.Contains(ref, "slice_pcap") {
+		t.Error("CLI reference should contain slice_pcap")
 	}
-	if !strings.Contains(ref, "epan extract") {
-		t.Error("CLI reference should contain extract command")
+	if !strings.Contains(ref, "export_objects") {
+		t.Error("CLI reference should contain export_objects")
 	}
 }
 

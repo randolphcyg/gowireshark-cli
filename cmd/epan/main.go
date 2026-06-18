@@ -313,7 +313,7 @@ func evidenceCmd(args []string) {
 	}
 	fs := flag.NewFlagSet("evidence bundle", flag.ExitOnError)
 	file := fs.String("file", "", "pcap path")
-	filterStr := fs.String("filter", "", "display filter")
+	filterStr := fs.String("filter", "frame", "display filter (defaults to all frames)")
 	_ = fs.Parse(args[1:])
 	requireFile(*file)
 	bundle, err := gowireshark.BuildEvidenceBundle(*file, gowireshark.FrameSelector{Filter: *filterStr}, gowireshark.WithIgnoreErrors(true))

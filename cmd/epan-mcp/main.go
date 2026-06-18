@@ -28,6 +28,8 @@ const (
 	maxPathLength         = 1024
 	rateLimitWindow       = time.Second
 	maxRequestsPerWindow  = 30
+	mcpCacheTTL           = 5 * time.Minute
+	mcpCacheCleanInterval = 10 * time.Minute
 )
 
 func main() {
@@ -91,6 +93,91 @@ func (rl *rateLimiter) allow() bool {
 
 var globalRateLimiter = newRateLimiter(rateLimitWindow, maxRequestsPerWindow)
 
+// mcpCache is a simple in-memory cache for high-frequency read-only MCP tools
+// (list_protocols, list_fields, get_version, etc.) to reduce epan CLI fork overhead.
+type mcpCache struct {
+	mu       sync.Mutex
+	entries  map[string]*mcpCacheEntry
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+type mcpCacheEntry struct {
+	value     *epanOutput
+	expiresAt time.Time
+}
+
+var globalCache = newMCPCache()
+
+func newMCPCache() *mcpCache {
+	c := &mcpCache{
+		entries: make(map[string]*mcpCacheEntry),
+		stopCh:  make(chan struct{}),
+	}
+	go c.cleanLoop()
+	return c
+}
+
+func (c *mcpCache) get(key string) *epanOutput {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil
+	}
+	return entry.value
+}
+
+func (c *mcpCache) set(key string, value *epanOutput) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = &mcpCacheEntry{
+		value:     value,
+		expiresAt: time.Now().Add(mcpCacheTTL),
+	}
+}
+
+func (c *mcpCache) cleanLoop() {
+	ticker := time.NewTicker(mcpCacheCleanInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.mu.Lock()
+			now := time.Now()
+			for k, v := range c.entries {
+				if now.After(v.expiresAt) {
+					delete(c.entries, k)
+				}
+			}
+			c.mu.Unlock()
+		case <-c.stopCh:
+			return
+		}
+	}
+}
+
+func (c *mcpCache) stop() {
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
+}
+
+// cachedRunEpan runs epan with caching. If the same key is used and a valid
+// cached result exists, it returns the cached result without forking epan CLI.
+// The key should be a unique string combining the tool name and input parameters.
+func cachedRunEpan(ctx context.Context, key string, args ...string) (*epanOutput, error) {
+	if cached := globalCache.get(key); cached != nil {
+		return cached, nil
+	}
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	globalCache.set(key, out)
+	return out, nil
+}
+
 func runHTTPServer(srv *mcp.Server, addr, endpoint, token string) error {
 	if endpoint == "" {
 		endpoint = "/mcp"
@@ -144,181 +231,75 @@ func runHTTPServer(srv *mcp.Server, addr, endpoint, token string) error {
 func newMCPServer() *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "epan", Version: "1.0.0"}, nil)
 
+	// --- Core analysis ---
 	addTool(srv, &mcp.Tool{
-		Name:        "get_version",
-		Description: "Get runtime version information",
-	}, handleVersion)
+		Name:        "triage_pcap",
+		Description: "Quick triage of a PCAP: frame count, streams, expert findings, stats, conversations, and timeline — all in one call.",
+		InputSchema: toolInputSchema("triage_pcap"),
+	}, handleTriagePcap)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "validate_filter",
-		Description: "Validate a display filter expression (returns true/false)",
-		InputSchema: toolInputSchema("validate_filter"),
-	}, handleFilterValidate)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "validate_filter_detailed",
-		Description: "Validate a display filter with detailed field-level feedback",
-		InputSchema: toolInputSchema("validate_filter_detailed"),
-	}, handleFilterValidateDetailed)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "suggest_filter",
-		Description: "Suggest display filter field names by prefix (e.g. 'tcp.' or 'ip.')",
-		InputSchema: toolInputSchema("suggest_filter"),
-	}, handleFilterSuggest)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_protocols",
-		Description: "List all supported protocols",
-	}, handleMetadataProtocols)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_fields",
-		Description: "List all display filter fields",
-	}, handleMetadataFields)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "get_field_info",
-		Description: "Get metadata for a display filter field",
-		InputSchema: toolInputSchema("get_field_info"),
-	}, handleMetadataField)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "count_frames",
-		Description: "Count frames in a PCAP file",
-		InputSchema: toolInputSchema("count_frames"),
-	}, handleFramesCount)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_frames",
-		Description: "Get paginated frames from a PCAP file",
-		InputSchema: toolInputSchema("list_frames"),
-	}, handleFramesPage)
+		Name:        "search_frames",
+		Description: "Search frames with display filter, pagination, field extraction, or batch indices. Use filter for display filter, page/size for pagination, fields for field export, indices for batch retrieval by frame numbers.",
+		InputSchema: toolInputSchema("search_frames"),
+	}, handleSearchFrames)
 
 	addTool(srv, &mcp.Tool{
 		Name:        "get_frame",
-		Description: "Get a single frame by frame number",
+		Description: "Get a single frame by number, with optional hex dump and field extraction.",
 		InputSchema: toolInputSchema("get_frame"),
-	}, handleFramesGet)
+	}, handleGetFrame)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "get_frames_batch",
-		Description: "Get frames by comma-separated frame numbers (e.g. '1,5,10')",
-		InputSchema: toolInputSchema("get_frames_batch"),
-	}, handleFramesBatch)
+		Name:        "inspect_stream",
+		Description: "Follow and reconstruct a TCP/UDP stream with payload and metadata.",
+		InputSchema: toolInputSchema("inspect_stream"),
+	}, handleInspectStream)
+
+	// --- Filter helpers ---
+	addTool(srv, &mcp.Tool{
+		Name:        "validate_filter",
+		Description: "Validate a Wireshark display filter. Set detailed=true for field-level feedback.",
+		InputSchema: toolInputSchema("validate_filter"),
+	}, handleValidateFilter)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "get_frame_hex",
-		Description: "Get hex dump for a frame",
-		InputSchema: toolInputSchema("get_frame_hex"),
-	}, handleFramesHex)
+		Name:        "suggest_filter",
+		Description: "Suggest display filter field names by prefix (e.g. 'tcp.', 'ip.')",
+		InputSchema: toolInputSchema("suggest_filter"),
+	}, handleSuggestFilter)
 
+	// --- Metadata ---
 	addTool(srv, &mcp.Tool{
-		Name:        "get_frame_fields",
-		Description: "Export display filter fields from frames as JSON",
-		InputSchema: toolInputSchema("get_frame_fields"),
-	}, handleFramesFields)
+		Name:        "get_field_info",
+		Description: "Get metadata for a Wireshark display filter field (e.g. 'tcp.stream')",
+		InputSchema: toolInputSchema("get_field_info"),
+	}, handleGetFieldInfo)
 
+	// --- Evidence & export ---
 	addTool(srv, &mcp.Tool{
-		Name:        "list_streams",
-		Description: "List TCP/UDP streams with stream IDs",
-		InputSchema: toolInputSchema("list_streams"),
-	}, handleStreamsList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_conversations",
-		Description: "List network conversations from a PCAP file",
-		InputSchema: toolInputSchema("list_conversations"),
-	}, handleConversationsList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "timeline_summary",
-		Description: "Get traffic timeline from a PCAP file",
-		InputSchema: toolInputSchema("timeline_summary"),
-	}, handleTimelineSummary)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_files",
-		Description: "List files detected in network traffic",
-		InputSchema: toolInputSchema("list_files"),
-	}, handleFilesList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "list_expert_findings",
-		Description: "Get expert analysis findings (anomalies, warnings, violations)",
-		InputSchema: toolInputSchema("list_expert_findings"),
-	}, handleExpertList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "follow_stream",
-		Description: "Follow and reconstruct a TCP/UDP stream",
-		InputSchema: toolInputSchema("follow_stream"),
-	}, handleFollowStream)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "create_pcap_slice",
-		Description: "Slice a PCAP file. Output goes to OUTPUT_DIR.",
-		InputSchema: toolInputSchema("create_pcap_slice"),
+		Name:        "slice_pcap",
+		Description: "Slice a PCAP file by display filter or frame indices. Output goes to OUTPUT_DIR.",
+		InputSchema: toolInputSchema("slice_pcap"),
 	}, handleSlicePcap)
 
 	addTool(srv, &mcp.Tool{
-		Name:        "create_evidence_bundle",
-		Description: "Build a forensic evidence bundle (conversations, expert infos, protocol hierarchy)",
-		InputSchema: toolInputSchema("create_evidence_bundle"),
-	}, handleEvidenceBundle)
+		Name:        "build_evidence",
+		Description: "Gather all forensic artifacts (conversations, endpoints, expert infos, protocol hierarchy) into an evidence bundle.",
+		InputSchema: toolInputSchema("build_evidence"),
+	}, handleBuildEvidence)
+
+	addTool(srv, &mcp.Tool{
+		Name:        "export_objects",
+		Description: "List or extract files/objects from network traffic. Use action='list' to enumerate, action='extract' to save files to a directory.",
+		InputSchema: toolInputSchema("export_objects"),
+	}, handleExportObjects)
 
 	addTool(srv, &mcp.Tool{
 		Name:        "verify_zeek_alert",
-		Description: "Verify a Zeek alert against packet evidence",
+		Description: "Verify a Zeek alert against packet evidence: validates filter, finds candidate frames, streams, and expert findings.",
 		InputSchema: toolInputSchema("verify_zeek_alert"),
 	}, handleVerifyZeekAlert)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "tap_conversations",
-		Description: "Get conversation stats. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("tap_conversations"),
-	}, handleTapConversations)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "tap_endpoints",
-		Description: "Get endpoint stats. Type: eth|ip|tcp|udp.",
-		InputSchema: toolInputSchema("tap_endpoints"),
-	}, handleTapEndpoints)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "service_response_times",
-		Description: "Get service response times for a protocol",
-		InputSchema: toolInputSchema("service_response_times"),
-	}, handleSRTList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "exportable_objects",
-		Description: "List exportable objects for a protocol",
-		InputSchema: toolInputSchema("exportable_objects"),
-	}, handleExportObjectList)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "write_exportable_object",
-		Description: "Write an export object to a file",
-		InputSchema: toolInputSchema("write_exportable_object"),
-	}, handleExportObjectWrite)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "stats_summary",
-		Description: "Get statistical summary of a PCAP file",
-		InputSchema: toolInputSchema("stats_summary"),
-	}, handleStatsSummary)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "extract_files",
-		Description: "Extract files from network traffic to a directory",
-		InputSchema: toolInputSchema("extract_files"),
-	}, handleExtractFiles)
-
-	addTool(srv, &mcp.Tool{
-		Name:        "health_check",
-		Description: "Check runtime environment health",
-	}, handleDoctor)
 
 	registerResources(srv)
 	registerPrompts(srv)
@@ -395,13 +376,37 @@ func toolInputSchema(name string) map[string]any {
 	out := map[string]any{"type": "string", "minLength": 1, "description": "Output path. Relative paths resolve under OUTPUT_DIR."}
 
 	switch name {
+	case "triage_pcap":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":   file,
+			"filter": filter,
+		})
+	case "search_frames":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":    file,
+			"filter":  filter,
+			"page":    map[string]any{"type": "integer", "minimum": 1, "default": 1},
+			"size":    map[string]any{"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+			"fields":  map[string]any{"type": "string", "description": "Comma-separated Wireshark field names for field extraction."},
+			"indices": map[string]any{"type": "string", "description": "Comma-separated frame numbers for batch retrieval."},
+		})
+	case "get_frame":
+		return objectSchema([]string{"file", "index"}, map[string]any{
+			"file":        file,
+			"index":       map[string]any{"type": "integer", "minimum": 1},
+			"include_hex": map[string]any{"type": "boolean", "default": false, "description": "Include hex dump of the frame."},
+			"fields":      map[string]any{"type": "string", "description": "Comma-separated Wireshark field names."},
+		})
+	case "inspect_stream":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":     file,
+			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
+			"filter":   filter,
+		})
 	case "validate_filter":
 		return objectSchema([]string{"expr"}, map[string]any{
-			"expr": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter expression to validate."},
-		})
-	case "validate_filter_detailed":
-		return objectSchema([]string{"expr"}, map[string]any{
-			"expr": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter expression to validate with detailed feedback."},
+			"expr":     map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter expression to validate."},
+			"detailed": map[string]any{"type": "boolean", "default": false, "description": "Return detailed field-level validation feedback."},
 		})
 	case "suggest_filter":
 		return objectSchema([]string{"prefix"}, map[string]any{
@@ -412,71 +417,26 @@ func toolInputSchema(name string) map[string]any {
 		return objectSchema([]string{"name"}, map[string]any{
 			"name": map[string]any{"type": "string", "minLength": 1, "description": "Wireshark display filter field name, e.g. 'tcp.stream'."},
 		})
-	case "count_frames":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "list_frames":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-			"page":   map[string]any{"type": "integer", "minimum": 1, "default": 1},
-			"size":   map[string]any{"type": "integer", "minimum": 1, "default": 20},
-		})
-	case "get_frame":
-		return objectSchema([]string{"file", "index"}, map[string]any{
-			"file":  file,
-			"index": map[string]any{"type": "integer", "minimum": 1},
-		})
-	case "follow_stream":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":     file,
-			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}, "default": "tcp"},
-			"filter":   filter,
-		})
-	case "create_pcap_slice":
+	case "slice_pcap":
 		return objectSchema([]string{"file", "out"}, map[string]any{
 			"file":    file,
 			"out":     out,
 			"filter":  filter,
 			"indices": map[string]any{"type": "string", "description": "Comma-separated frame numbers."},
 		})
-	case "tap_conversations":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "tcp"},
-			"filter": filter,
-		})
-	case "tap_endpoints":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"type":   map[string]any{"type": "string", "enum": []string{"eth", "ip", "tcp", "udp"}, "default": "ip"},
-			"filter": filter,
-		})
-	case "write_exportable_object":
-		return objectSchema([]string{"file", "protocol", "packetNum", "out"}, map[string]any{
-			"file":      file,
-			"protocol":  map[string]any{"type": "string", "minLength": 1},
-			"packetNum": map[string]any{"type": "integer", "minimum": 1},
-			"out":       out,
-			"filter":    filter,
-		})
-	case "get_frame_fields":
-		return objectSchema([]string{"file", "fields"}, map[string]any{
-			"file":   file,
-			"fields": map[string]any{"type": "string", "minLength": 1, "description": "Comma-separated Wireshark field names, e.g. 'ip.src,ip.dst,tcp.port'."},
-			"filter": filter,
-		})
-	case "stats_summary":
+	case "build_evidence":
 		return objectSchema([]string{"file"}, map[string]any{
 			"file":   file,
 			"filter": filter,
 		})
-	case "extract_files":
-		return objectSchema([]string{"file", "out"}, map[string]any{
-			"file": file,
-			"out":  out,
+	case "export_objects":
+		return objectSchema([]string{"file"}, map[string]any{
+			"file":       file,
+			"action":     map[string]any{"type": "string", "enum": []string{"list", "extract"}, "default": "list", "description": "list to enumerate objects, extract to save files to output_dir."},
+			"protocol":   map[string]any{"type": "string", "description": "Optional protocol filter, e.g. 'http', 'smb'. Leave empty for all."},
+			"output_dir": map[string]any{"type": "string", "description": "Output directory (required for action=extract)."},
+			"packet_num": map[string]any{"type": "integer", "minimum": 1, "description": "Packet number to extract a specific object (for action=extract with protocol set)."},
+			"filter":     filter,
 		})
 	case "verify_zeek_alert":
 		return objectSchema([]string{"file"}, map[string]any{
@@ -488,59 +448,6 @@ func toolInputSchema(name string) map[string]any {
 			"src_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 			"dst_port": map[string]any{"type": "integer", "minimum": 1, "maximum": 65535},
 			"protocol": map[string]any{"type": "string", "enum": []string{"tcp", "udp"}},
-		})
-	case "get_frames_batch":
-		return objectSchema([]string{"file", "indices"}, map[string]any{
-			"file":    file,
-			"indices": map[string]any{"type": "string", "minLength": 1, "description": "Comma-separated frame numbers, e.g. '1,5,10'."},
-			"filter":  filter,
-		})
-	case "get_frame_hex":
-		return objectSchema([]string{"file", "index"}, map[string]any{
-			"file":  file,
-			"index": map[string]any{"type": "integer", "minimum": 1},
-		})
-	case "list_streams":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "list_conversations":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "timeline_summary":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "list_files":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "list_expert_findings":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "create_evidence_bundle":
-		return objectSchema([]string{"file"}, map[string]any{
-			"file":   file,
-			"filter": filter,
-		})
-	case "exportable_objects":
-		return objectSchema([]string{"file", "protocol"}, map[string]any{
-			"file":     file,
-			"protocol": map[string]any{"type": "string", "minLength": 1, "description": "Protocol name, e.g. 'http'."},
-			"filter":   filter,
-		})
-	case "service_response_times":
-		return objectSchema([]string{"file", "protocol"}, map[string]any{
-			"file":     file,
-			"protocol": map[string]any{"type": "string", "minLength": 1, "description": "Protocol name, e.g. 'smb', 'dns', 'http'."},
-			"filter":   filter,
 		})
 	default:
 		return objectSchema(nil, map[string]any{})
@@ -604,7 +511,7 @@ func timeout() time.Duration {
 			return d
 		}
 	}
-	return 120 * time.Second
+	return defaultTimeout
 }
 
 func maxOutputBytes() int64 {
@@ -922,7 +829,7 @@ func suggestionForError(code, message string) string {
 		if strings.Contains(strings.ToLower(message), "filter") {
 			return "Call validate_filter or suggest_filter before reusing this display filter."
 		}
-		return "Call health_check to verify the runtime, then retry with a narrower query."
+		return "Retry with corrected parameters and a narrower query."
 	default:
 		return "Inspect error_message and retry with corrected parameters."
 	}
@@ -931,12 +838,12 @@ func suggestionForError(code, message string) string {
 func nextToolForError(code, message string) string {
 	switch code {
 	case "INVALID_PATH":
-		return "health_check"
+		return "list_files"
 	case "CLI_ERROR":
 		if strings.Contains(strings.ToLower(message), "filter") {
 			return "validate_filter"
 		}
-		return "health_check"
+		return ""
 	default:
 		return ""
 	}
@@ -1012,86 +919,45 @@ func parseOutput(out *epanOutput) map[string]any {
 
 type emptyIn struct{}
 
-type filterValidateIn struct {
-	Expr string `json:"expr"`
+type triagePcapIn struct {
+	File   string  `json:"file"`
+	Filter *string `json:"filter,omitempty"`
 }
 
-type filterValidateDetailedIn struct {
-	Expr string `json:"expr"`
+type searchFramesIn struct {
+	File    string  `json:"file"`
+	Filter  *string `json:"filter,omitempty"`
+	Page    int     `json:"page,omitempty"`
+	Size    int     `json:"size,omitempty"`
+	Fields  *string `json:"fields,omitempty"`
+	Indices *string `json:"indices,omitempty"`
 }
 
-type filterSuggestIn struct {
+type getFrameIn struct {
+	File       string  `json:"file"`
+	Index      int     `json:"index"`
+	IncludeHex bool    `json:"include_hex,omitempty"`
+	Fields     *string `json:"fields,omitempty"`
+}
+
+type inspectStreamIn struct {
+	File     string  `json:"file"`
+	Protocol *string `json:"protocol,omitempty"`
+	Filter   *string `json:"filter,omitempty"`
+}
+
+type validateFilterIn struct {
+	Expr     string `json:"expr"`
+	Detailed bool   `json:"detailed,omitempty"`
+}
+
+type suggestFilterIn struct {
 	Prefix string `json:"prefix"`
 	Limit  int    `json:"limit,omitempty"`
 }
 
-type metadataFieldIn struct {
+type getFieldInfoIn struct {
 	Name string `json:"name"`
-}
-
-type framesCountIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type framesPageIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-	Page   int     `json:"page,omitempty"`
-	Size   int     `json:"size,omitempty"`
-}
-
-type framesGetIn struct {
-	File  string `json:"file"`
-	Index int    `json:"index"`
-}
-
-type framesBatchIn struct {
-	File    string  `json:"file"`
-	Indices string  `json:"indices"`
-	Filter  *string `json:"filter,omitempty"`
-}
-
-type framesHexIn struct {
-	File  string `json:"file"`
-	Index int    `json:"index"`
-}
-
-type framesFieldsIn struct {
-	File   string  `json:"file"`
-	Fields string  `json:"fields"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type streamsListIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type conversationsListIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type timelineSummaryIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type filesListIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type expertListIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type followStreamIn struct {
-	File     string  `json:"file"`
-	Protocol *string `json:"protocol,omitempty"`
-	Filter   *string `json:"filter,omitempty"`
 }
 
 type slicePcapIn struct {
@@ -1101,9 +967,18 @@ type slicePcapIn struct {
 	Indices *string `json:"indices,omitempty"`
 }
 
-type evidenceBundleIn struct {
+type buildEvidenceIn struct {
 	File   string  `json:"file"`
 	Filter *string `json:"filter,omitempty"`
+}
+
+type exportObjectsIn struct {
+	File      string  `json:"file"`
+	Action    *string `json:"action,omitempty"`
+	Protocol  *string `json:"protocol,omitempty"`
+	OutputDir *string `json:"output_dir,omitempty"`
+	PacketNum *int    `json:"packet_num,omitempty"`
+	Filter    *string `json:"filter,omitempty"`
 }
 
 type verifyZeekAlertIn struct {
@@ -1117,183 +992,96 @@ type verifyZeekAlertIn struct {
 	Proto   *string        `json:"protocol,omitempty"`
 }
 
-type tapConversationsIn struct {
-	File   string  `json:"file"`
-	Type   *string `json:"type,omitempty"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type tapEndpointsIn struct {
-	File   string  `json:"file"`
-	Type   *string `json:"type,omitempty"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type srtListIn struct {
-	File     string  `json:"file"`
-	Protocol string  `json:"protocol"`
-	Filter   *string `json:"filter,omitempty"`
-}
-
-type exportObjectListIn struct {
-	File     string  `json:"file"`
-	Protocol string  `json:"protocol"`
-	Filter   *string `json:"filter,omitempty"`
-}
-
-type exportObjectWriteIn struct {
-	File      string  `json:"file"`
-	Protocol  string  `json:"protocol"`
-	PacketNum int     `json:"packetNum"`
-	Out       string  `json:"out"`
-	Filter    *string `json:"filter,omitempty"`
-}
-
-type statsSummaryIn struct {
-	File   string  `json:"file"`
-	Filter *string `json:"filter,omitempty"`
-}
-
-type extractFilesIn struct {
-	File string `json:"file"`
-	Out  string `json:"out"`
-}
-
-type doctorIn struct{}
-
 // --- Handlers ---
 
-func handleVersion(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runEpan(ctx, "version")
+func handleTriagePcap(ctx context.Context, _ *mcp.CallToolRequest, in triagePcapIn) (*mcp.CallToolResult, map[string]any, error) {
+	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	return successResult(out)
+	result := map[string]any{"file": file}
+	filterArg := in.Filter
+
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"frames", "count"}, file, filterArg)...); err != nil {
+		result["frame_count_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["frame_count"] = parsed["count"]
+	}
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"streams", "list"}, file, filterArg)...); err != nil {
+		result["streams_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["streams"] = parsed["list"]
+	}
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"expert", "list"}, file, filterArg)...); err != nil {
+		result["expert_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["expert_findings"] = parsed["list"]
+	}
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"stats"}, file, filterArg)...); err != nil {
+		result["stats_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["stats"] = parsed
+	}
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "conversations", "list"}, file, filterArg)...); err != nil {
+		result["conversations_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["conversations"] = parsed["list"]
+	}
+
+	text, _ := json.MarshalIndent(result, "", "  ")
+	epanOut := &epanOutput{Text: string(text), Raw: text}
+	epanOut.suggestTool("search_frames")
+	return successResult(epanOut)
 }
 
-func handleFilterValidate(ctx context.Context, _ *mcp.CallToolRequest, in filterValidateIn) (*mcp.CallToolResult, map[string]any, error) {
-	if in.Expr == "" {
-		return nil, nil, fmt.Errorf("expr is required")
-	}
-	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, "filter", "validate", "--expr", in.Expr)
+func handleSearchFrames(ctx context.Context, _ *mcp.CallToolRequest, in searchFramesIn) (*mcp.CallToolResult, map[string]any, error) {
+	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	return successResult(out)
-}
-
-func handleFilterValidateDetailed(ctx context.Context, _ *mcp.CallToolRequest, in filterValidateDetailedIn) (*mcp.CallToolResult, map[string]any, error) {
-	if in.Expr == "" {
-		return nil, nil, fmt.Errorf("expr is required")
-	}
-	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", in.Expr)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFilterSuggest(ctx context.Context, _ *mcp.CallToolRequest, in filterSuggestIn) (*mcp.CallToolResult, map[string]any, error) {
-	if in.Prefix == "" {
-		return nil, nil, fmt.Errorf("prefix is required")
-	}
-	if err := validateStringMax(in.Prefix, "prefix", 128); err != nil {
-		return nil, nil, err
-	}
-	limit := 50
-	if in.Limit > 0 {
-		limit = in.Limit
-	}
-	out, err := runEpan(ctx, "filter", "suggest", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleMetadataProtocols(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runEpan(ctx, "metadata", "protocols")
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleMetadataFields(ctx context.Context, _ *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, map[string]any, error) {
-	out, err := runEpan(ctx, "metadata", "fields")
-	if err != nil {
-		return nil, nil, err
-	}
-	out.suggestTool("suggest_filter")
-	return successResult(out)
-}
-
-func handleMetadataField(ctx context.Context, _ *mcp.CallToolRequest, in metadataFieldIn) (*mcp.CallToolResult, map[string]any, error) {
-	if in.Name == "" {
-		return nil, nil, fmt.Errorf("name is required")
-	}
-	if err := validateStringMax(in.Name, "name", 128); err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, "metadata", "field", "--name", in.Name)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFramesCount(ctx context.Context, _ *mcp.CallToolRequest, in framesCountIn) (*mcp.CallToolResult, map[string]any, error) {
-	if err := validateStringMax(in.File, "file", maxPathLength); err != nil {
-		return nil, nil, err
-	}
-	if in.Filter != nil && *in.Filter != "" {
-		if err := validateStringMax(*in.Filter, "filter", maxFilterLength); err != nil {
+	switch {
+	case in.Indices != nil && *in.Indices != "":
+		args := []string{"frames", "batch", "--file", file, "--indices", *in.Indices}
+		if in.Filter != nil && *in.Filter != "" {
+			args = append(args, "--filter", *in.Filter)
+		}
+		out, err := runEpan(ctx, args...)
+		if err != nil {
 			return nil, nil, err
 		}
+		return successResult(out)
+	case in.Fields != nil && *in.Fields != "":
+		args := []string{"frames", "fields", "--file", file, "--fields", *in.Fields}
+		if in.Filter != nil && *in.Filter != "" {
+			args = append(args, "--filter", *in.Filter)
+		}
+		out, err := runEpan(ctx, args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		return successResult(out)
+	default:
+		page := in.Page
+		if page < 1 {
+			page = 1
+		}
+		size := in.Size
+		if size < 1 {
+			size = 20
+		}
+		args := []string{"frames", "page", "--file", file, "--page", strconv.Itoa(page), "--size", strconv.Itoa(size)}
+		if in.Filter != nil && *in.Filter != "" {
+			args = append(args, "--filter", *in.Filter)
+		}
+		out, err := runEpan(ctx, args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		return successResult(out)
 	}
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"frames", "count"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	out.suggestTool("list_streams")
-	return successResult(out)
 }
 
-func handleFramesPage(ctx context.Context, _ *mcp.CallToolRequest, in framesPageIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	page := in.Page
-	if page < 1 {
-		page = 1
-	}
-	size := in.Size
-	if size < 1 {
-		size = 20
-	}
-	args := []string{"frames", "page", "--file", file, "--page", strconv.Itoa(page), "--size", strconv.Itoa(size)}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFramesGet(ctx context.Context, _ *mcp.CallToolRequest, in framesGetIn) (*mcp.CallToolResult, map[string]any, error) {
+func handleGetFrame(ctx context.Context, _ *mcp.CallToolRequest, in getFrameIn) (*mcp.CallToolResult, map[string]any, error) {
 	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
@@ -1301,127 +1089,36 @@ func handleFramesGet(ctx context.Context, _ *mcp.CallToolRequest, in framesGetIn
 	if in.Index < 1 {
 		return nil, nil, fmt.Errorf("index must be >= 1, got %d", in.Index)
 	}
+	result := map[string]any{"file": file, "index": in.Index}
+
 	out, err := runEpan(ctx, "frames", "get", "--file", file, "--index", strconv.Itoa(in.Index))
 	if err != nil {
 		return nil, nil, err
 	}
-	return successResult(out)
+	result["frame"] = parseOutput(out)
+
+	if in.IncludeHex {
+		if hexOut, hexErr := runEpan(ctx, "frames", "hex", "--file", file, "--index", strconv.Itoa(in.Index)); hexErr != nil {
+			result["hex_error"] = hexErr.Error()
+		} else {
+			result["hex"] = parseOutput(hexOut)
+		}
+	}
+	if in.Fields != nil && *in.Fields != "" {
+		args := []string{"frames", "fields", "--file", file, "--fields", *in.Fields, "--filter", fmt.Sprintf("frame.number == %d", in.Index)}
+		if fieldsOut, fieldsErr := runEpan(ctx, args...); fieldsErr != nil {
+			result["fields_error"] = fieldsErr.Error()
+		} else {
+			result["fields"] = parseOutput(fieldsOut)
+		}
+	}
+
+	text, _ := json.MarshalIndent(result, "", "  ")
+	epanOut := &epanOutput{Text: string(text), Raw: text}
+	return successResult(epanOut)
 }
 
-func handleFramesBatch(ctx context.Context, _ *mcp.CallToolRequest, in framesBatchIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Indices == "" {
-		return nil, nil, fmt.Errorf("indices is required (comma-separated frame numbers)")
-	}
-	args := []string{"frames", "batch", "--file", file, "--indices", in.Indices}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFramesHex(ctx context.Context, _ *mcp.CallToolRequest, in framesHexIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Index < 1 {
-		return nil, nil, fmt.Errorf("index must be >= 1, got %d", in.Index)
-	}
-	out, err := runEpan(ctx, "frames", "hex", "--file", file, "--index", strconv.Itoa(in.Index))
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFramesFields(ctx context.Context, _ *mcp.CallToolRequest, in framesFieldsIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Fields == "" {
-		return nil, nil, fmt.Errorf("fields is required (comma-separated Wireshark field names)")
-	}
-	args := []string{"frames", "fields", "--file", file, "--fields", in.Fields}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleStreamsList(ctx context.Context, _ *mcp.CallToolRequest, in streamsListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"streams", "list"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleConversationsList(ctx context.Context, _ *mcp.CallToolRequest, in conversationsListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "conversations", "list"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleTimelineSummary(ctx context.Context, _ *mcp.CallToolRequest, in timelineSummaryIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "timeline", "summary"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFilesList(ctx context.Context, _ *mcp.CallToolRequest, in filesListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "files", "list"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleExpertList(ctx context.Context, _ *mcp.CallToolRequest, in expertListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"expert", "list"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleFollowStream(ctx context.Context, _ *mcp.CallToolRequest, in followStreamIn) (*mcp.CallToolResult, map[string]any, error) {
+func handleInspectStream(ctx context.Context, _ *mcp.CallToolRequest, in inspectStreamIn) (*mcp.CallToolResult, map[string]any, error) {
 	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
@@ -1438,6 +1135,61 @@ func handleFollowStream(ctx context.Context, _ *mcp.CallToolRequest, in followSt
 		args = append(args, "--filter", *in.Filter)
 	}
 	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return successResult(out)
+}
+
+func handleValidateFilter(ctx context.Context, _ *mcp.CallToolRequest, in validateFilterIn) (*mcp.CallToolResult, map[string]any, error) {
+	if in.Expr == "" {
+		return nil, nil, fmt.Errorf("expr is required")
+	}
+	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
+		return nil, nil, err
+	}
+	if in.Detailed {
+		out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", in.Expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return successResult(out)
+	}
+	out, err := runEpan(ctx, "filter", "validate", "--expr", in.Expr)
+	if err != nil {
+		return nil, nil, err
+	}
+	return successResult(out)
+}
+
+func handleSuggestFilter(ctx context.Context, _ *mcp.CallToolRequest, in suggestFilterIn) (*mcp.CallToolResult, map[string]any, error) {
+	if in.Prefix == "" {
+		return nil, nil, fmt.Errorf("prefix is required")
+	}
+	if err := validateStringMax(in.Prefix, "prefix", 128); err != nil {
+		return nil, nil, err
+	}
+	limit := 50
+	if in.Limit > 0 {
+		limit = in.Limit
+	}
+	cacheKey := fmt.Sprintf("suggest_filter:%s:%d", in.Prefix, limit)
+	out, err := cachedRunEpan(ctx, cacheKey, "filter", "suggest", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
+	if err != nil {
+		return nil, nil, err
+	}
+	return successResult(out)
+}
+
+func handleGetFieldInfo(ctx context.Context, _ *mcp.CallToolRequest, in getFieldInfoIn) (*mcp.CallToolResult, map[string]any, error) {
+	if in.Name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+	if err := validateStringMax(in.Name, "name", 128); err != nil {
+		return nil, nil, err
+	}
+	cacheKey := "get_field_info:" + in.Name
+	out, err := cachedRunEpan(ctx, cacheKey, "metadata", "field", "--name", in.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1470,17 +1222,85 @@ func handleSlicePcap(ctx context.Context, _ *mcp.CallToolRequest, in slicePcapIn
 	return successResult(out)
 }
 
-func handleEvidenceBundle(ctx context.Context, _ *mcp.CallToolRequest, in evidenceBundleIn) (*mcp.CallToolResult, map[string]any, error) {
+func handleBuildEvidence(ctx context.Context, _ *mcp.CallToolRequest, in buildEvidenceIn) (*mcp.CallToolResult, map[string]any, error) {
 	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"evidence", "bundle"}, file, in.Filter)...)
+	result := map[string]any{"file": file}
+	filterArg := in.Filter
+
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"evidence", "bundle"}, file, filterArg)...); err != nil {
+		result["evidence_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["evidence"] = parsed
+	}
+	if out, err := runEpan(ctx, fileFilterCLI([]string{"tap", "endpoints", "--type", "ip"}, file, filterArg)...); err != nil {
+		result["endpoints_error"] = err.Error()
+	} else if parsed := parseOutput(out); parsed != nil {
+		result["endpoints"] = parsed["list"]
+	}
+
+	text, _ := json.MarshalIndent(result, "", "  ")
+	epanOut := &epanOutput{Text: string(text), Raw: text}
+	epanOut.suggestTool("slice_pcap")
+	return successResult(epanOut)
+}
+
+func handleExportObjects(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectsIn) (*mcp.CallToolResult, map[string]any, error) {
+	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	out.suggestTool("create_pcap_slice")
-	return successResult(out)
+	action := "list"
+	if in.Action != nil && *in.Action != "" {
+		action = *in.Action
+	}
+	switch action {
+	case "extract":
+		if in.OutputDir == nil || *in.OutputDir == "" {
+			return nil, nil, fmt.Errorf("output_dir is required for action=extract")
+		}
+		outPath, err := resolveOutputPath(*in.OutputDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		// If protocol is specified, use export-object; otherwise use extract (file carving)
+		if in.Protocol != nil && *in.Protocol != "" {
+			if in.PacketNum == nil || *in.PacketNum <= 0 {
+				return nil, nil, fmt.Errorf("packet_num is required for action=extract with protocol")
+			}
+			args := []string{"export-object", "write", "--file", file, "--protocol", *in.Protocol, "--packet-num", strconv.Itoa(*in.PacketNum), "--out", outPath}
+			if in.Filter != nil && *in.Filter != "" {
+				args = append(args, "--filter", *in.Filter)
+			}
+			out, err := runEpan(ctx, args...)
+			if err != nil {
+				return nil, nil, err
+			}
+			return successResult(out)
+		}
+		// No protocol specified: bulk file extraction via epan extract
+		out, err := runEpan(ctx, "extract", "--file", file, "--out", outPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		return successResult(out)
+	default:
+		// list action
+		args := []string{"export-object", "list", "--file", file}
+		if in.Protocol != nil && *in.Protocol != "" {
+			args = append(args, "--protocol", *in.Protocol)
+		}
+		if in.Filter != nil && *in.Filter != "" {
+			args = append(args, "--filter", *in.Filter)
+		}
+		out, err := runEpan(ctx, args...)
+		if err != nil {
+			return nil, nil, err
+		}
+		return successResult(out)
+	}
 }
 
 func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verifyZeekAlertIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1608,214 +1428,6 @@ func firstInt(explicit *int, alert map[string]any, keys ...string) int {
 	return 0
 }
 
-func handleTapConversations(ctx context.Context, _ *mcp.CallToolRequest, in tapConversationsIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	convType := "tcp"
-	if in.Type != nil && *in.Type != "" {
-		if err := validateTapType(*in.Type, "eth", "ip", "tcp", "udp"); err != nil {
-			return nil, nil, err
-		}
-		convType = *in.Type
-	}
-	args := []string{"tap", "conversations", "--file", file, "--type", convType}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleTapEndpoints(ctx context.Context, _ *mcp.CallToolRequest, in tapEndpointsIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	epType := "ip"
-	if in.Type != nil && *in.Type != "" {
-		if err := validateTapType(*in.Type, "eth", "ip", "tcp", "udp"); err != nil {
-			return nil, nil, err
-		}
-		epType = *in.Type
-	}
-	args := []string{"tap", "endpoints", "--file", file, "--type", epType}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleSRTList(ctx context.Context, _ *mcp.CallToolRequest, in srtListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Protocol == "" {
-		return nil, nil, fmt.Errorf("protocol is required (e.g. smb, dns, http)")
-	}
-	args := []string{"srt", "list", "--file", file, "--protocol", in.Protocol}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleExportObjectList(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectListIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Protocol == "" {
-		return nil, nil, fmt.Errorf("protocol is required (e.g. http)")
-	}
-	args := []string{"export-object", "list", "--file", file, "--protocol", in.Protocol}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleExportObjectWrite(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectWriteIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Protocol == "" {
-		return nil, nil, fmt.Errorf("protocol is required (e.g. http)")
-	}
-	if in.PacketNum <= 0 {
-		return nil, nil, fmt.Errorf("packetNum must be > 0, got %d", in.PacketNum)
-	}
-	if in.Out == "" {
-		return nil, nil, fmt.Errorf("out is required (output file path)")
-	}
-	outPath, err := resolveOutputPath(in.Out)
-	if err != nil {
-		return nil, nil, err
-	}
-	args := []string{"export-object", "write", "--file", file, "--protocol", in.Protocol, "--packet-num", strconv.Itoa(in.PacketNum), "--out", outPath}
-	if in.Filter != nil && *in.Filter != "" {
-		args = append(args, "--filter", *in.Filter)
-	}
-	out, err := runEpan(ctx, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleStatsSummary(ctx context.Context, _ *mcp.CallToolRequest, in statsSummaryIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, fileFilterCLI([]string{"stats"}, file, in.Filter)...)
-	if err != nil {
-		return nil, nil, err
-	}
-	out.suggestTool("create_evidence_bundle")
-	return successResult(out)
-}
-
-func handleExtractFiles(ctx context.Context, _ *mcp.CallToolRequest, in extractFilesIn) (*mcp.CallToolResult, map[string]any, error) {
-	file, err := resolvePCAPPath(in.File)
-	if err != nil {
-		return nil, nil, err
-	}
-	if in.Out == "" {
-		return nil, nil, fmt.Errorf("out is required (output directory path)")
-	}
-	outPath, err := resolveOutputPath(in.Out)
-	if err != nil {
-		return nil, nil, err
-	}
-	out, err := runEpan(ctx, "extract", "--file", file, "--out", outPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	return successResult(out)
-}
-
-func handleDoctor(ctx context.Context, _ *mcp.CallToolRequest, _ doctorIn) (*mcp.CallToolResult, map[string]any, error) {
-	bin := epanBin()
-	absBin, _ := exec.LookPath(bin)
-
-	result := map[string]any{
-		"binary":                    bin,
-		"resolvedBinaryPath":        absBin,
-		"pcapDir":                   pcapDir(),
-		"outputDir":                 outputDir(),
-		"timeout":                   timeout().String(),
-		"maxOutputBytes":            maxOutputBytes(),
-		"wiresharkLibDir":           os.Getenv("WIRESHARK_LIB_DIR"),
-		"wiresharkDataDir":          os.Getenv("WIRESHARK_DATA_DIR"),
-		"wiresharkConfDir":          os.Getenv("WIRESHARK_CONF_DIR"),
-		"epanPcapDir":        os.Getenv("EPAN_PCAP_DIR"),
-		"epanOutputDir":      os.Getenv("EPAN_OUTPUT_DIR"),
-		"epanTimeout":        os.Getenv("EPAN_TIMEOUT"),
-		"epanMaxOutputBytes": os.Getenv("EPAN_MAX_OUTPUT_BYTES"),
-	}
-
-	// List available PCAP files in the allowed directory
-	if dir := pcapDir(); dir != "" {
-		entries, err := os.ReadDir(dir)
-		if err == nil {
-			var pcaps []string
-			for _, e := range entries {
-				if e.IsDir() {
-					continue
-				}
-				ext := strings.ToLower(filepath.Ext(e.Name()))
-				if ext == ".pcap" || ext == ".pcapng" || ext == ".cap" {
-					pcaps = append(pcaps, e.Name())
-				}
-			}
-			result["availablePcaps"] = pcaps
-			result["availablePcapCount"] = len(pcaps)
-		} else {
-			result["pcapDirError"] = err.Error()
-		}
-	} else {
-		result["pcapDirNote"] = "PCAP_DIR not set; any absolute path is accepted"
-	}
-
-	verOut, verErr := runEpan(ctx, "version")
-	if verErr != nil {
-		result["runtimeStatus"] = fmt.Sprintf("unavailable: %v", verErr)
-	} else {
-		result["runtimeStatus"] = "available"
-		var verParsed map[string]any
-		if json.Unmarshal([]byte(verOut.Text), &verParsed) == nil {
-			if v, ok := verParsed["version"]; ok {
-				result["runtimeVersion"] = v
-			}
-		}
-	}
-
-	_, err := os.Stat(absBin)
-	result["binaryFound"] = err == nil
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	return textResult(string(text)), nil, nil
-}
-
 // --- Resources ---
 
 func registerResources(srv *mcp.Server) {
@@ -1935,6 +1547,20 @@ func registerResources(srv *mcp.Server) {
 		}, nil
 	})
 
+	srv.AddResource(&mcp.Resource{
+		URI:         "epan://docs/protocols",
+		Name:        "Supported Protocols",
+		Description: "List of all supported Wireshark protocols",
+		MIMEType:    "application/json",
+	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		out, err := cachedRunEpan(ctx, "list_protocols_resource", "metadata", "protocols")
+		if err != nil {
+			return jsonResource("epan://docs/protocols", map[string]any{"error": err.Error()}), nil
+		}
+		parsed := parseOutput(out)
+		return jsonResource("epan://docs/protocols", parsed), nil
+	})
+
 	srv.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: "epan://pcap/{name}/summary",
 		Name:        "PCAP Summary",
@@ -2015,89 +1641,55 @@ func cliReferenceMarkdown() string {
 			return string(data)
 		}
 	}
-	return `# epan CLI Reference
+	return `# epan MCP Tool Reference
 
-## System & Discovery
+## Core Analysis
 
-` + "`" + "`" + "`" + `bash
-epan version
-epan filter validate --expr 'tcp.port == 80'
-epan filter validate-detailed --expr 'tcp.stream'
-epan filter suggest --prefix 'tcp.'
-epan metadata protocols
-epan metadata fields
-epan metadata field --name tcp.stream
+` + "`" + "`" + "`" + `
+triage_pcap(file, filter?)       — Frame count, streams, expert findings, stats, conversations
+search_frames(file, filter?, page?, size?, fields?, indices?) — Paginated/batch/field frame search
+get_frame(file, index, include_hex?, fields?) — Single frame with optional hex and fields
+inspect_stream(file, protocol?, filter?) — Follow and reconstruct TCP/UDP stream
 ` + "`" + "`" + "`" + `
 
-## Frame Inspection
+## Filter Helpers
 
-` + "`" + "`" + "`" + `bash
-epan frames count --file capture.pcap --filter 'tcp'
-epan frames page --file capture.pcap --page 1 --size 20 --filter 'http'
-epan frames get --file capture.pcap --index 5
-epan frames batch --file capture.pcap --indices 1,5,10
-epan frames hex --file capture.pcap --index 5
-epan frames write --file capture.pcap --fields frame.number,ip.src,ip.dst,frame.protocols --out frames.jsonl
-epan frames fields --file capture.pcap --fields ip.src,ip.dst,tcp.port
+` + "`" + "`" + "`" + `
+validate_filter(expr, detailed?) — Validate display filter, set detailed=true for field feedback
+suggest_filter(prefix, limit?)   — Suggest field names by prefix (e.g. 'tcp.')
 ` + "`" + "`" + "`" + `
 
-## Traffic Analysis
+## Metadata
 
-` + "`" + "`" + "`" + `bash
-epan streams list --file capture.pcap --filter 'tcp'
-epan traffic conversations list --file capture.pcap --filter 'dns'
-epan traffic timeline summary --file capture.pcap
-epan traffic files list --file capture.pcap
+` + "`" + "`" + "`" + `
+get_field_info(name)            — Get metadata for a field (e.g. 'tcp.stream')
+
 ` + "`" + "`" + "`" + `
 
-## Stream Reassembly
+## Evidence & Export
 
-` + "`" + "`" + "`" + `bash
-epan follow --file capture.pcap --protocol tcp --filter 'tcp.stream eq 3'
-epan follow --file capture.pcap --protocol udp --filter 'udp.stream eq 1'
+` + "`" + "`" + "`" + `
+slice_pcap(file, out, filter?, indices?)  — Slice PCAP by filter or indices
+build_evidence(file, filter?)             — Gather forensic artifacts into a bundle
+export_objects(file, action?, protocol?, output_dir?, packet_num?) — List (action=list) or extract (action=extract) files/objects
+verify_zeek_alert(file, filter?, alert?, ...) — Verify Zeek alert against packet evidence
 ` + "`" + "`" + "`" + `
 
-## Expert & Evidence
+## Resources
 
-` + "`" + "`" + "`" + `bash
-epan expert list --file capture.pcap --filter 'tcp'
-epan slice pcap --file capture.pcap --filter 'tcp.port == 443' --out tls.pcap
-epan slice pcap --file capture.pcap --indices 1,5,9 --out selected.pcap
-epan evidence bundle --file capture.pcap --filter 'tcp.port == 80'
 ` + "`" + "`" + "`" + `
-
-## Tap & SRT
-
-` + "`" + "`" + "`" + `bash
-epan tap conversations --file capture.pcap --type tcp --filter 'tcp'
-epan tap endpoints --file capture.pcap --type ip
-epan srt list --file capture.pcap --protocol smb
-epan srt list --file capture.pcap --protocol dns
-` + "`" + "`" + "`" + `
-
-## Export Objects
-
-` + "`" + "`" + "`" + `bash
-epan export-object list --file capture.pcap --protocol http
-epan export-object write --file capture.pcap --protocol http --packet-num 42 --out extracted.dat
-` + "`" + "`" + "`" + `
-
-## Stats & Extract
-
-` + "`" + "`" + "`" + `bash
-epan stats --file capture.pcap --filter 'tcp'
-epan extract --file capture.pcap --out extracted-files/
+epan://docs/protocols  — List of all supported Wireshark protocols
 ` + "`" + "`" + "`" + `
 
 ## Guidance
 
-- Use ` + "`" + `frames page` + "`" + ` as the default inspection command for large pcaps.
-- ` + "`" + `streams list` + "`" + ` reveals followable streams (look for ` + "`" + `streamId >= 0` + "`" + `).
-- ` + "`" + `follow` + "`" + ` expects a Wireshark display filter (e.g. ` + "`" + `tcp.stream eq 0` + "`" + `).
-- ` + "`" + `slice pcap` + "`" + ` creates a new pcap from selected frames.
-- ` + "`" + `evidence bundle` + "`" + ` produces comprehensive forensic metadata.
-- ` + "`" + `export-object write` + "`" + ` extracts HTTP objects to disk.
-- Always validate new display filters with ` + "`" + `epan filter validate-detailed` + "`" + ` before using them.
+- Use ` + "`" + `triage_pcap` + "`" + ` as the first command for any new PCAP.
+- ` + "`" + `search_frames` + "`" + ` is the default inspection command. Use filter for display filter, page/size for pagination, fields for field export, indices for batch retrieval.
+- ` + "`" + `inspect_stream` + "`" + ` expects a Wireshark display filter (e.g. ` + "`" + `tcp.stream eq 0` + "`" + `).
+- ` + "`" + `slice_pcap` + "`" + ` creates a new pcap from selected frames.
+- ` + "`" + `build_evidence` + "`" + ` gathers all forensic artifacts (conversations, endpoints, expert infos, protocol hierarchy).
+- ` + "`" + `export_objects` + "`" + ` with action=extract saves files/objects to output_dir.
+- Always validate new display filters with ` + "`" + `validate_filter` + "`" + ` with detailed=true before using them.
 `
 }
 
@@ -2115,21 +1707,17 @@ func registerPrompts(srv *mcp.Server) {
 				Content: &mcp.TextContent{
 					Text: `I need to perform initial triage on a PCAP file. Please follow this workflow:
 
-1. First, gauge the capture size:
-   - Use count_frames to count frames
+1. Use triage_pcap to get a comprehensive overview:
+   - Frame count, protocol distribution
+   - TCP/UDP streams
+   - Expert findings (anomalies, warnings)
+   - Statistical summary
 
-2. Map the traffic structure:
-   - Use list_streams to see TCP/UDP streams
+2. Optional: use search_frames (paginated) to inspect specific frames if needed.
 
-3. Check for anomalies:
-   - Use list_expert_findings to find protocol violations, warnings
+3. Summarize your findings: protocol distribution, stream count, notable anomalies.
 
-4. Get protocol distribution:
-   - Use stats_summary for a statistical overview
-
-5. Summarize your findings: protocol distribution, stream count, notable anomalies.
-
-IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (list_frames) only when you need to inspect specific packets.`,
+IMPORTANT: Do NOT dump all frames. Use triage_pcap for the high-level view and search_frames only when you need to inspect specific packets.`,
 				},
 			}},
 		}, nil
@@ -2146,22 +1734,22 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (list_frames) 
 				Content: &mcp.TextContent{
 					Text: `I need to perform a deep-dive analysis on a specific network stream. Please follow this workflow:
 
-1. First, identify the stream ID:
-   - Use list_streams to list all streams
+1. First, identify the stream of interest:
+   - Use triage_pcap to see all streams and frame counts
    - Note: only follow streams where streamId >= 0
 
 2. Follow the stream to get reassembled payload:
-   - Use follow_stream with protocol=tcp|udp and filter='tcp.stream eq N'
+   - Use inspect_stream with protocol=tcp|udp and filter='tcp.stream eq N'
 
 3. Inspect key frames in the stream:
-   - Use list_frames with filter='tcp.stream eq N'
-   - Look at frame content using get_frame
+   - Use search_frames with filter='tcp.stream eq N'
+   - Look at individual frame content using get_frame
 
 4. Check for any objects embedded in the stream:
-   - Use exportable_objects with protocol=http (if HTTP)
+   - Use export_objects with protocol=http, action=list (if HTTP)
 
-5. If HTTP objects found, extract relevant ones:
-   - Use write_exportable_object
+5. If HTTP objects found, extract them:
+   - Use export_objects with action=extract, protocol=http, packet_num=N, output_dir=OUTPUT_DIR
 
 6. Summarize what the stream contains: protocol type, payload content, any extracted objects.`,
 				},
@@ -2181,21 +1769,20 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (list_frames) 
 					Text: `I need to produce forensic evidence from a PCAP file. Please follow this workflow:
 
 1. Start with triage to understand the capture:
-   - Use count_frames, list_streams, list_expert_findings
-   - Use stats_summary for statistical overview
+   - Use triage_pcap to get frame count, streams, expert findings, and stats
 
 2. Narrow scope with validated filters:
    - Construct a display filter for the traffic of interest
-   - ALWAYS validate: use validate_filter with your filter expression
+   - ALWAYS validate: use validate_filter with detailed=true
    - DO NOT guess Wireshark display filter syntax
 
 3. Slice the PCAP to isolate evidence:
-   - Use create_pcap_slice with your validated filter
-   - Verify the slice with count_frames on the output
+   - Use slice_pcap with your validated filter
+   - Verify the slice with triage_pcap on the output
 
 4. Build the evidence bundle:
-   - Use create_evidence_bundle with your validated filter
-   - This produces conversations, expert infos, protocol hierarchy
+   - Use build_evidence with your validated filter
+   - This produces conversations, endpoints, expert infos, protocol hierarchy
 
 5. Present findings:
    - Frame count in the slice
@@ -2219,21 +1806,16 @@ IMPORTANT: Do NOT dump all frames. Use paginated frame inspection (list_frames) 
 					Text: `I need to extract HTTP objects from a PCAP file. Please follow this workflow:
 
 1. List all exportable HTTP objects:
-   - Use exportable_objects with protocol=http
+   - Use export_objects with protocol=http, action=list
 
 2. Review the object list for interesting items:
    - Look at content types, sizes, filenames
    - Identify objects relevant to the investigation
 
 3. Extract specific objects:
-   - Use write_exportable_object for each interesting object
-   - Provide the packetNum (packet number) for each object to extract
-   - Output must go to OUTPUT_DIR
-
-4. For bulk extraction of all detected files:
-   - Use extract_files with the out directory
-
-5. Report what was extracted: object types, filenames, sizes, and where they were saved.`,
+   - Use export_objects with action=extract and packet_num for individual objects
+   - Or use action=extract without protocol for bulk file carving
+   - Output must go to OUTPUT_DIR via output_dir parameter`,
 				},
 			}},
 		}, nil
