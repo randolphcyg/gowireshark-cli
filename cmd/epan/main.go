@@ -16,9 +16,33 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal("usage: epan <version|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>")
+		fatal("usage: epan <version|triage_pcap|search_frames|get_frame|inspect_stream|validate_filter|suggest_filter|get_field_info|slice_pcap|build_evidence|export_objects|verify_zeek_alert|filter|metadata|frames|streams|traffic|expert|follow|slice|evidence|tap|srt|export-object|stats|extract>")
 	}
 	switch os.Args[1] {
+	// ── MCP-composite commands (1:1 with MCP tools) ──
+	case "triage_pcap":
+		triagePcapCmd(os.Args[2:])
+	case "search_frames":
+		searchFramesCmd(os.Args[2:])
+	case "get_frame":
+		getFrameCmd(os.Args[2:])
+	case "inspect_stream":
+		inspectStreamCmd(os.Args[2:])
+	case "validate_filter":
+		validateFilterCmd(os.Args[2:])
+	case "suggest_filter":
+		suggestFilterCmd(os.Args[2:])
+	case "get_field_info":
+		getFieldInfoCmd(os.Args[2:])
+	case "slice_pcap":
+		slicePcapCmd(os.Args[2:])
+	case "build_evidence":
+		buildEvidenceCmd(os.Args[2:])
+	case "export_objects":
+		exportObjectsCmd(os.Args[2:])
+	case "verify_zeek_alert":
+		verifyZeekAlertCmd(os.Args[2:])
+	// ── Granular commands (internal / backward compat) ──
 	case "version":
 		ver, err := gowireshark.RuntimeVersion(context.Background())
 		must(err)

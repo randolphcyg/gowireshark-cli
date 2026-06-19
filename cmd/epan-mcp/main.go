@@ -993,45 +993,24 @@ type verifyZeekAlertIn struct {
 }
 
 // --- Handlers ---
+// Each handler delegates to the corresponding MCP-composite CLI command,
+// keeping only validation and path resolution in the MCP layer.
 
 func handleTriagePcap(ctx context.Context, _ *mcp.CallToolRequest, in triagePcapIn) (*mcp.CallToolResult, map[string]any, error) {
 	file, err := resolvePCAPPath(in.File)
 	if err != nil {
 		return nil, nil, err
 	}
-	result := map[string]any{"file": file}
-	filterArg := in.Filter
-
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"frames", "count"}, file, filterArg)...); err != nil {
-		result["frame_count_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["frame_count"] = parsed["count"]
+	args := []string{"triage_pcap", "--file", file}
+	if in.Filter != nil && *in.Filter != "" {
+		args = append(args, "--filter", *in.Filter)
 	}
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"streams", "list"}, file, filterArg)...); err != nil {
-		result["streams_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["streams"] = parsed["list"]
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
 	}
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"expert", "list"}, file, filterArg)...); err != nil {
-		result["expert_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["expert_findings"] = parsed["list"]
-	}
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"stats"}, file, filterArg)...); err != nil {
-		result["stats_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["stats"] = parsed
-	}
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"traffic", "conversations", "list"}, file, filterArg)...); err != nil {
-		result["conversations_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["conversations"] = parsed["list"]
-	}
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	epanOut := &epanOutput{Text: string(text), Raw: text}
-	epanOut.suggestTool("search_frames")
-	return successResult(epanOut)
+	out.suggestTool("search_frames")
+	return successResult(out)
 }
 
 func handleSearchFrames(ctx context.Context, _ *mcp.CallToolRequest, in searchFramesIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1039,28 +1018,15 @@ func handleSearchFrames(ctx context.Context, _ *mcp.CallToolRequest, in searchFr
 	if err != nil {
 		return nil, nil, err
 	}
-	switch {
-	case in.Indices != nil && *in.Indices != "":
-		args := []string{"frames", "batch", "--file", file, "--indices", *in.Indices}
-		if in.Filter != nil && *in.Filter != "" {
-			args = append(args, "--filter", *in.Filter)
-		}
-		out, err := runEpan(ctx, args...)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
-	case in.Fields != nil && *in.Fields != "":
-		args := []string{"frames", "fields", "--file", file, "--fields", *in.Fields}
-		if in.Filter != nil && *in.Filter != "" {
-			args = append(args, "--filter", *in.Filter)
-		}
-		out, err := runEpan(ctx, args...)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
-	default:
+	args := []string{"search_frames", "--file", file}
+	if in.Filter != nil && *in.Filter != "" {
+		args = append(args, "--filter", *in.Filter)
+	}
+	if in.Indices != nil && *in.Indices != "" {
+		args = append(args, "--indices", *in.Indices)
+	} else if in.Fields != nil && *in.Fields != "" {
+		args = append(args, "--fields", *in.Fields)
+	} else {
 		page := in.Page
 		if page < 1 {
 			page = 1
@@ -1069,16 +1035,13 @@ func handleSearchFrames(ctx context.Context, _ *mcp.CallToolRequest, in searchFr
 		if size < 1 {
 			size = 20
 		}
-		args := []string{"frames", "page", "--file", file, "--page", strconv.Itoa(page), "--size", strconv.Itoa(size)}
-		if in.Filter != nil && *in.Filter != "" {
-			args = append(args, "--filter", *in.Filter)
-		}
-		out, err := runEpan(ctx, args...)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
+		args = append(args, "--page", strconv.Itoa(page), "--size", strconv.Itoa(size))
 	}
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return successResult(out)
 }
 
 func handleGetFrame(ctx context.Context, _ *mcp.CallToolRequest, in getFrameIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1089,33 +1052,18 @@ func handleGetFrame(ctx context.Context, _ *mcp.CallToolRequest, in getFrameIn) 
 	if in.Index < 1 {
 		return nil, nil, fmt.Errorf("index must be >= 1, got %d", in.Index)
 	}
-	result := map[string]any{"file": file, "index": in.Index}
-
-	out, err := runEpan(ctx, "frames", "get", "--file", file, "--index", strconv.Itoa(in.Index))
+	args := []string{"get_frame", "--file", file, "--index", strconv.Itoa(in.Index)}
+	if in.IncludeHex {
+		args = append(args, "--include-hex")
+	}
+	if in.Fields != nil && *in.Fields != "" {
+		args = append(args, "--fields", *in.Fields)
+	}
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
-	result["frame"] = parseOutput(out)
-
-	if in.IncludeHex {
-		if hexOut, hexErr := runEpan(ctx, "frames", "hex", "--file", file, "--index", strconv.Itoa(in.Index)); hexErr != nil {
-			result["hex_error"] = hexErr.Error()
-		} else {
-			result["hex"] = parseOutput(hexOut)
-		}
-	}
-	if in.Fields != nil && *in.Fields != "" {
-		args := []string{"frames", "fields", "--file", file, "--fields", *in.Fields, "--filter", fmt.Sprintf("frame.number == %d", in.Index)}
-		if fieldsOut, fieldsErr := runEpan(ctx, args...); fieldsErr != nil {
-			result["fields_error"] = fieldsErr.Error()
-		} else {
-			result["fields"] = parseOutput(fieldsOut)
-		}
-	}
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	epanOut := &epanOutput{Text: string(text), Raw: text}
-	return successResult(epanOut)
+	return successResult(out)
 }
 
 func handleInspectStream(ctx context.Context, _ *mcp.CallToolRequest, in inspectStreamIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1130,7 +1078,7 @@ func handleInspectStream(ctx context.Context, _ *mcp.CallToolRequest, in inspect
 		}
 		proto = *in.Protocol
 	}
-	args := []string{"follow", "--file", file, "--protocol", proto}
+	args := []string{"inspect_stream", "--file", file, "--protocol", proto}
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
@@ -1148,14 +1096,11 @@ func handleValidateFilter(ctx context.Context, _ *mcp.CallToolRequest, in valida
 	if err := validateStringMax(in.Expr, "expr", maxExprLength); err != nil {
 		return nil, nil, err
 	}
+	args := []string{"validate_filter", "--expr", in.Expr}
 	if in.Detailed {
-		out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", in.Expr)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
+		args = append(args, "--detailed")
 	}
-	out, err := runEpan(ctx, "filter", "validate", "--expr", in.Expr)
+	out, err := runEpan(ctx, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1174,7 +1119,7 @@ func handleSuggestFilter(ctx context.Context, _ *mcp.CallToolRequest, in suggest
 		limit = in.Limit
 	}
 	cacheKey := fmt.Sprintf("suggest_filter:%s:%d", in.Prefix, limit)
-	out, err := cachedRunEpan(ctx, cacheKey, "filter", "suggest", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
+	out, err := cachedRunEpan(ctx, cacheKey, "suggest_filter", "--prefix", in.Prefix, "--limit", strconv.Itoa(limit))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1189,7 +1134,7 @@ func handleGetFieldInfo(ctx context.Context, _ *mcp.CallToolRequest, in getField
 		return nil, nil, err
 	}
 	cacheKey := "get_field_info:" + in.Name
-	out, err := cachedRunEpan(ctx, cacheKey, "metadata", "field", "--name", in.Name)
+	out, err := cachedRunEpan(ctx, cacheKey, "get_field_info", "--name", in.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1208,7 +1153,7 @@ func handleSlicePcap(ctx context.Context, _ *mcp.CallToolRequest, in slicePcapIn
 	if err != nil {
 		return nil, nil, err
 	}
-	args := []string{"slice", "pcap", "--file", file, "--out", outPath}
+	args := []string{"slice_pcap", "--file", file, "--out", outPath}
 	if in.Filter != nil && *in.Filter != "" {
 		args = append(args, "--filter", *in.Filter)
 	}
@@ -1227,24 +1172,16 @@ func handleBuildEvidence(ctx context.Context, _ *mcp.CallToolRequest, in buildEv
 	if err != nil {
 		return nil, nil, err
 	}
-	result := map[string]any{"file": file}
-	filterArg := in.Filter
-
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"evidence", "bundle"}, file, filterArg)...); err != nil {
-		result["evidence_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["evidence"] = parsed
+	args := []string{"build_evidence", "--file", file}
+	if in.Filter != nil && *in.Filter != "" {
+		args = append(args, "--filter", *in.Filter)
 	}
-	if out, err := runEpan(ctx, fileFilterCLI([]string{"tap", "endpoints", "--type", "ip"}, file, filterArg)...); err != nil {
-		result["endpoints_error"] = err.Error()
-	} else if parsed := parseOutput(out); parsed != nil {
-		result["endpoints"] = parsed["list"]
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	epanOut := &epanOutput{Text: string(text), Raw: text}
-	epanOut.suggestTool("slice_pcap")
-	return successResult(epanOut)
+	out.suggestTool("slice_pcap")
+	return successResult(out)
 }
 
 func handleExportObjects(ctx context.Context, _ *mcp.CallToolRequest, in exportObjectsIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1256,8 +1193,14 @@ func handleExportObjects(ctx context.Context, _ *mcp.CallToolRequest, in exportO
 	if in.Action != nil && *in.Action != "" {
 		action = *in.Action
 	}
-	switch action {
-	case "extract":
+	args := []string{"export_objects", "--file", file, "--action", action}
+	if in.Protocol != nil && *in.Protocol != "" {
+		args = append(args, "--protocol", *in.Protocol)
+	}
+	if in.Filter != nil && *in.Filter != "" {
+		args = append(args, "--filter", *in.Filter)
+	}
+	if action == "extract" {
 		if in.OutputDir == nil || *in.OutputDir == "" {
 			return nil, nil, fmt.Errorf("output_dir is required for action=extract")
 		}
@@ -1265,42 +1208,19 @@ func handleExportObjects(ctx context.Context, _ *mcp.CallToolRequest, in exportO
 		if err != nil {
 			return nil, nil, err
 		}
-		// If protocol is specified, use export-object; otherwise use extract (file carving)
+		args = append(args, "--out", outPath)
 		if in.Protocol != nil && *in.Protocol != "" {
 			if in.PacketNum == nil || *in.PacketNum <= 0 {
 				return nil, nil, fmt.Errorf("packet_num is required for action=extract with protocol")
 			}
-			args := []string{"export-object", "write", "--file", file, "--protocol", *in.Protocol, "--packet-num", strconv.Itoa(*in.PacketNum), "--out", outPath}
-			if in.Filter != nil && *in.Filter != "" {
-				args = append(args, "--filter", *in.Filter)
-			}
-			out, err := runEpan(ctx, args...)
-			if err != nil {
-				return nil, nil, err
-			}
-			return successResult(out)
+			args = append(args, "--packet-num", strconv.Itoa(*in.PacketNum))
 		}
-		// No protocol specified: bulk file extraction via epan extract
-		out, err := runEpan(ctx, "extract", "--file", file, "--out", outPath)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
-	default:
-		// list action
-		args := []string{"export-object", "list", "--file", file}
-		if in.Protocol != nil && *in.Protocol != "" {
-			args = append(args, "--protocol", *in.Protocol)
-		}
-		if in.Filter != nil && *in.Filter != "" {
-			args = append(args, "--filter", *in.Filter)
-		}
-		out, err := runEpan(ctx, args...)
-		if err != nil {
-			return nil, nil, err
-		}
-		return successResult(out)
 	}
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return successResult(out)
 }
 
 func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verifyZeekAlertIn) (*mcp.CallToolResult, map[string]any, error) {
@@ -1315,42 +1235,18 @@ func handleVerifyZeekAlert(ctx context.Context, _ *mcp.CallToolRequest, in verif
 	if filter == "" {
 		return nil, nil, fmt.Errorf("filter or Zeek alert fields are required")
 	}
-
-	resp := map[string]any{
-		"tool":   "verify_zeek_alert",
-		"file":   file,
-		"filter": filter,
+	args := []string{"verify_zeek_alert", "--file", file, "--filter", filter}
+	if in.Alert != nil && len(in.Alert) > 0 {
+		// Extract alert type string from the map for reporting
+		if alertType := firstString(nil, in.Alert, "alert", "type", "msg"); alertType != "" {
+			args = append(args, "--alert", alertType)
+		}
 	}
-	if in.Alert != nil {
-		resp["alert"] = in.Alert
+	out, err := runEpan(ctx, args...)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	if out, err := runEpan(ctx, "filter", "validate-detailed", "--expr", filter); err != nil {
-		resp["filter_valid"] = false
-		resp["filter_error"] = err.Error()
-		resp["suggestion"] = "Call suggest_filter and retry with valid Wireshark display fields."
-	} else {
-		resp["filter_valid"] = true
-		resp["filter_validation"] = parseOutput(out)
-	}
-	if out, err := runEpan(ctx, "frames", "page", "--file", file, "--page", "1", "--size", "20", "--filter", filter); err != nil {
-		resp["candidate_frames_error"] = err.Error()
-	} else {
-		resp["candidate_frames"] = parseOutput(out)
-	}
-	if out, err := runEpan(ctx, "streams", "list", "--file", file, "--filter", filter); err != nil {
-		resp["streams_error"] = err.Error()
-	} else {
-		resp["streams"] = parseOutput(out)
-	}
-	if out, err := runEpan(ctx, "expert", "list", "--file", file, "--filter", filter); err != nil {
-		resp["expert_findings_error"] = err.Error()
-	} else {
-		resp["expert_findings"] = parseOutput(out)
-	}
-
-	text, _ := json.MarshalIndent(resp, "", "  ")
-	return textResult(string(text)), nil, nil
+	return successResult(out)
 }
 
 func zeekAlertFilter(in verifyZeekAlertIn) string {
